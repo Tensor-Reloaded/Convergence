@@ -106,11 +106,13 @@ if __name__ == '__main__':
     # net = DPN92()
     # net = ShuffleNetG2()
     # net = SENet18()
-    net = VGG("VGG11")
+    # net = VGG("VGG11")
+    net = LeNet()
+
     net = net.to(device)
     if device == 'cuda':
         net = torch.nn.DataParallel(net)
-        cudnn.benchmark = True
+        cudnn.benchmark = False#True
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
@@ -131,8 +133,9 @@ if __name__ == '__main__':
     ])
 
     trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
-    train_sampler = LossBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size, criterion=nn.CrossEntropyLoss)
-    trainloader = torch.utils.data.DataLoader(trainset, num_workers=4, batch_sampler=train_sampler)
+    train_sampler = BatchLossBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size, criterion=nn.CrossEntropyLoss, interval=10)
+    trainloader = torch.utils.data.DataLoader(trainset, num_workers=0, batch_sampler=train_sampler)
+    # trainloader = torch.utils.data.DataLoader(trainset, num_workers=4, batch_size = args.batch_size)
 
     testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
     testloader = torch.utils.data.DataLoader(testset, batch_size=args.test_batch_size, shuffle=False, num_workers=1)
