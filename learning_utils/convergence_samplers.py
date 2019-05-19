@@ -67,7 +67,7 @@ class BatchLossBasedShuffler(BatchSampler):
             if batch_idx % self.interval == 0:
                 losses = self.compute_losses()
                 losses_indices = torch.argsort(losses, descending=self.descending)
-
+                
             if batch_idx % self.interval == 0:
                 aux_losses_indices = losses_indices[-self.batch_size:]
             else:     
@@ -77,7 +77,7 @@ class BatchLossBasedShuffler(BatchSampler):
                 self.unused_indices = torch.cat([self.unused_indices[0:index], self.unused_indices[index+1:]])
             
             yield aux_losses_indices
-        del self.unused_indices
+        del self.unused_indices                
 
 
     def __len__(self):

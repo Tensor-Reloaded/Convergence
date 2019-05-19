@@ -20,7 +20,7 @@ from learning_utils.convergence_samplers import *
 
 # Training
 def train(epoch):
-    print('\nEpoch: %d' % epoch)
+    print('\nEpoch: %d' % (epoch + 1))
     print('Train')
     net.train()
     train_loss = 0
@@ -40,7 +40,7 @@ def train(epoch):
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
-        update_progress_bar(progress_bar_obj, index=batch_idx, loss=(train_loss / (batch_idx + 1)),acc=(correct / total) * 100, c=correct, t=total)
+        update_progress_bar(progress_bar_obj, index=batch_idx + 1, loss=(train_loss / (batch_idx + 1)),acc=(correct / total) * 100, c=correct, t=total)
 
 def test(epoch):
     global best_acc
@@ -61,7 +61,7 @@ def test(epoch):
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            update_progress_bar(progress_bar_obj, index=batch_idx, loss=(test_loss / (batch_idx + 1)),acc=(correct / total) * 100, c=correct, t=total)
+            update_progress_bar(progress_bar_obj, index=batch_idx + 1, loss=(test_loss / (batch_idx + 1)),acc=(correct / total) * 100, c=correct, t=total)
 
     # Save checkpoint.
     acc = 100.*correct/total
@@ -85,7 +85,7 @@ if __name__ == '__main__':
     parser.add_argument('--test_batch_size', default=100, type=float, help='test batch size')
     parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
     parser.add_argument('--n_epoch', default=100, type=int, help='the number of epochs to train the model')
-    parser.add_argument('--interval', default=10, type=int, help='the interval when to recalculate and sort the samples')
+    parser.add_argument('--interval', default=1, type=int, help='the interval when to recalculate and sort the samples')
     parser.add_argument('--descending', default=True, type=bool, help='True if the samples should be sorted descendingly based on the chosen metric')
     parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
     args = parser.parse_args()
@@ -134,13 +134,13 @@ if __name__ == '__main__':
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
     ])
 
-    trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+    trainset = torchvision.datasets.CIFAR10(root='../storage/data', train=True, download=True, transform=transform_train)
     train_sampler = BatchLossBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size, criterion=nn.CrossEntropyLoss, interval=args.interval,  descending=args.descending)
     trainloader = torch.utils.data.DataLoader(trainset, num_workers=0, batch_sampler=train_sampler)
     # trainloader = torch.utils.data.DataLoader(trainset, num_workers=4, batch_size = args.batch_size)
 
-    testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=args.test_batch_size, shuffle=False, num_workers=1)
+    testset = torchvision.datasets.CIFAR10(root='../storage/data', train=False, download=True, transform=transform_test)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=args.test_batch_size, shuffle=False, num_workers=2)
 
     classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
