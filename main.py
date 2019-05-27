@@ -40,7 +40,7 @@ def train(epoch):
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
-        update_progress_bar(progress_bar_obj, index=batch_idx, loss=(train_loss / (batch_idx + 1)),acc=(correct / total), c=correct, t=total)
+        update_progress_bar(progress_bar_obj, index=batch_idx+1, loss=(train_loss / (batch_idx + 1)),acc=(correct / total), c=correct, t=total)
 
 def test(epoch):
     global best_acc
@@ -106,8 +106,8 @@ if __name__ == '__main__':
     # net = DPN92()
     # net = ShuffleNetG2()
     # net = SENet18()
-    # net = VGG("VGG11")
-    net = LeNet()
+    net = VGG("VGG11")
+    # net = LeNet()
 
     net = net.to(device)
     if device == 'cuda':
@@ -133,7 +133,7 @@ if __name__ == '__main__':
     ])
 
     trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
-    train_sampler = BatchLossBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size, criterion=nn.CrossEntropyLoss, interval=10)
+    train_sampler = BatchLossBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size, criterion=nn.CrossEntropyLoss, interval=1)
     trainloader = torch.utils.data.DataLoader(trainset, num_workers=0, batch_sampler=train_sampler)
     # trainloader = torch.utils.data.DataLoader(trainset, num_workers=4, batch_size = args.batch_size)
 
