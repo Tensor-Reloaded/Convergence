@@ -4,7 +4,7 @@ from torch.utils.data.sampler import Sampler, BatchSampler
 
 class BatchLossBasedShuffler(BatchSampler):
     
-    def __init__(self, data_source, net, batch_size, criterion=nn.CrossEntropyLoss, drop_last=False, interval = 1):
+    def __init__(self, data_source, net, batch_size, criterion=nn.CrossEntropyLoss, drop_last=False, interval = 1, descending = True):
 
         self.data_source = data_source
         self.data = torch.FloatTensor(self.data_source.data).transpose(1,-1)
@@ -14,6 +14,7 @@ class BatchLossBasedShuffler(BatchSampler):
         self.criterion = criterion(reduction='none')
         self.drop_last = drop_last
         self.interval = interval
+        self.descending = descending
 
         self._num_samples = None
         self.device = 'cuda' if next(self.net.parameters()).is_cuda else 'cpu'
@@ -65,8 +66,8 @@ class BatchLossBasedShuffler(BatchSampler):
         for batch_idx in range(self.__len__()):
             if batch_idx % self.interval == 0:
                 losses = self.compute_losses()
-                losses_indices = torch.argsort(losses)
-
+                losses_indices = torch.argsort(losses, descending=self.descending)
+                
             if batch_idx % self.interval == 0:
                 aux_losses_indices = losses_indices[-self.batch_size:]
             else:     
@@ -76,7 +77,7 @@ class BatchLossBasedShuffler(BatchSampler):
                 self.unused_indices = torch.cat([self.unused_indices[0:index], self.unused_indices[index+1:]])
             
             yield aux_losses_indices
-        del self.unused_indices
+        del self.unused_indices                
 
 
     def __len__(self):
