@@ -1,12 +1,3 @@
-'''Some helper functions for PyTorch, including:
-    - get_mean_and_std: calculate the mean and std value of dataset.
-    - msr_init: net parameter initialization.
-    - progress_bar: progress bar mimic xlua.progress.
-'''
-import os
-import sys
-import time
-import math
 import random
 
 import numpy as np
@@ -102,6 +93,7 @@ def format_time(seconds):
         f = '0ms'
     return f
 
+
 def reset_seed(seed):
     """
     Sets seed of all random number generators used to the same seed, given as argument
@@ -110,3 +102,21 @@ def reset_seed(seed):
     torch.manual_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
+
+
+def begin_chart(chart_name, x_axis_name):
+    print(f'{{"chart":"{chart_name}", "axis": "{x_axis_name}"}}')
+
+
+def begin_per_epoch_chart(chart_name):
+    begin_chart(chart_name, 'Epoch')
+
+
+def add_chart_point(chart_name, x, y):
+    print(f'{{"chart": "{chart_name}", "x":{x}, "y":{y}}}')
+
+def compute_weights_l1_norm(model):
+    norm_sum = 0
+    for param in model.parameters():
+        norm_sum += torch.sum(torch.abs(param))
+    return norm_sum

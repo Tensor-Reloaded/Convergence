@@ -15,7 +15,7 @@ import os
 import argparse
 
 from models import *
-from learning_utils.utils import get_progress_bar, update_progress_bar, reset_seed
+from learning_utils.utils import *
 from learning_utils.convergence_samplers import *
 
 # Training
@@ -35,13 +35,17 @@ def train(epoch):
         loss.backward()
         optimizer.step()
 
-        train_loss += loss.item()
+        total_train_loss += loss.item()
         _, predicted = outputs.max(1)
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
-
-
-        update_progress_bar(progress_bar_obj, index=batch_idx + 1, loss=(train_loss / (batch_idx + 1)),acc=(correct / total) * 100, c=correct, t=total)
+        
+        accuracy = correct / total
+        train_loss = total_train_loss / batches_count
+        print("Batches count: ", batches_count)
+        print("Acc : {}, loss : {}".format(accuracy, train_loss))
+        add_chart_point('trainAcc', epoch, accuracy)
+        add_chart_point('trainLoss', epoch, train_loss)
 
 def test(epoch, normal=False):
     global best_acc
@@ -62,21 +66,26 @@ def test(epoch, normal=False):
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            update_progress_bar(progress_bar_obj, index=batch_idx + 1, loss=(test_loss / (batch_idx + 1)),acc=(correct / total) * 100, c=correct, t=total)
+            
 
+    accuracy = correct / total
+    test_loss = total_test_loss / count
+    print("Acc : {}, loss : {}".format(accuracy, test_loss))
+    add_chart_point('testAcc', epoch, accuracy)
+    add_chart_point('testLoss', epoch, test_loss)
 
     # Save checkpoint.
     acc = 100.*correct/total
 
     if normal and epoch in [0,50,100,150,200,250,300,350]:
-        if not os.path.isdir('../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'_normal'):
-                os.makedirs('../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'_normal', exist_ok=True)
+        if not os.path.isdir('../storage/Convergence/checkpoint/'+net.__class__.__name__+'_normal'):
+                os.makedirs('../storage/Convergence/checkpoint/'+net.__class__.__name__+'_normal', exist_ok=True)
         state = {
             'net': net.state_dict(),
             'acc': acc,
             'epoch': epoch,
         }
-        torch.save(state, '../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'_normal/ckpt_epoch_'+str(epoch)+'.t7')
+        torch.save(state, '../storage/Convergence/checkpoint/'+net.__class__.__name__+'_normal/ckpt_epoch_'+str(epoch)+'.t7')
 
     if acc > best_acc:
         print('\nSaving..')
@@ -85,9 +94,9 @@ def test(epoch, normal=False):
             'acc': acc,
             'epoch': epoch,
         }
-        if not os.path.isdir('../artifacts/checkpoint/Convergence/'+net.__class__.__name__):
-            os.makedirs('../artifacts/checkpoint/Convergence/'+net.__class__.__name__, exist_ok=True)
-        torch.save(state, '../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'/ckpt.t7')
+        if not os.path.isdir('../storage/Convergence/checkpoint/'+net.__class__.__name__):
+            os.makedirs('../storage/Convergence/checkpoint/'+net.__class__.__name__, exist_ok=True)
+        torch.save(state, '../storage/Convergence/checkpoint/'+net.__class__.__name__+'/ckpt.t7')
         best_acc = acc
 
 if __name__ == '__main__':
@@ -169,12 +178,12 @@ if __name__ == '__main__':
         print('==> Resuming from checkpoint..')
         if args.from_normal_chk == "":
             chk = "ckpt.t7"
-            assert os.path.isdir('../artifacts/checkpoint/Convergence/'+net.__class__.__name__), 'Error: no checkpoint directory found!'
-            checkpoint = torch.load('../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'/'+chk)
+            assert os.path.isdir('../storage/Convergence/checkpoint/'+net.__class__.__name__), 'Error: no checkpoint directory found!'
+            checkpoint = torch.load('../storage/Convergence/checkpoint/'+net.__class__.__name__+'/'+chk)
         else:
             chk = 'ckpt_epoch_'+args.from_normal_chk+'.t7'
-            assert os.path.isdir('../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'_normal'), 'Error: no checkpoint directory found!'
-            checkpoint = torch.load('../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'_normal/'+chk)
+            assert os.path.isdir('../storage/Convergence/checkpoint/'+net.__class__.__name__+'_normal'), 'Error: no checkpoint directory found!'
+            checkpoint = torch.load('../storage/Convergence/checkpoint/'+net.__class__.__name__+'_normal/'+chk)
         
         from collections import OrderedDict
         new_state_dict = OrderedDict()
