@@ -64,8 +64,20 @@ def test(epoch):
 
             update_progress_bar(progress_bar_obj, index=batch_idx + 1, loss=(test_loss / (batch_idx + 1)),acc=(correct / total) * 100, c=correct, t=total)
 
+
     # Save checkpoint.
     acc = 100.*correct/total
+
+    if epoch in [0,50,100,150,200]:
+        if not os.path.isdir('../artifacts/checkpoint/Convergence/'+net.__class__.__name__):
+                os.makedirs('../artifacts/checkpoint/Convergence/'+net.__class__.__name__, exist_ok=True)
+        state = {
+            'net': net.state_dict(),
+            'acc': acc,
+            'epoch': epoch,
+        }
+        torch.save(state, '../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'/ckpt_epoch_'+str(epoch)+'.t7')
+
     if acc > best_acc:
         print('\nSaving..')
         state = {
@@ -73,9 +85,9 @@ def test(epoch):
             'acc': acc,
             'epoch': epoch,
         }
-        if not os.path.isdir('checkpoint'):
-            os.mkdir('checkpoint')
-        torch.save(state, './checkpoint/ckpt.t7')
+        if not os.path.isdir('../artifacts/checkpoint/Convergence/'+net.__class__.__name__):
+            os.makedirs('../artifacts/checkpoint/Convergence/'+net.__class__.__name__, exist_ok=True)
+        torch.save(state, '../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'/ckpt.t7')
         best_acc = acc
 
 if __name__ == '__main__':
@@ -83,12 +95,15 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
     parser.add_argument('--batch_size', default=128, type=float, help='batch size')
-    parser.add_argument('--test_batch_size', default=100, type=float, help='test batch size')
+    parser.add_argument('--test_batch_size', default=1024, type=float, help='test batch size')
     parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
-    parser.add_argument('--n_epoch', default=100, type=int, help='the number of epochs to train the model')
+    parser.add_argument('--n_epoch', default=350, type=int, help='the number of epochs to train the model')
     parser.add_argument('--interval', default=1, type=int, help='the interval when to recalculate and sort the samples')
     parser.add_argument('--descending', default=True, type=bool, help='True if the samples should be sorted descendingly based on the chosen metric')
+    parser.add_argument('--normal', '-n', action='store_true', help='do the trainig using a normal random shuffle dataloader')
     parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
+    parser.add_argument('--from_normal_chk', default="", type=str, help='True if the samples should be sorted descendingly based on the chosen metric')
+    
     args = parser.parse_args()
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -109,12 +124,12 @@ if __name__ == '__main__':
     # net = DPN92()
     # net = ShuffleNetG2()
     # net = SENet18()
-    net = VGG("VGG11")
+    net = VGG("VGG19")
     # net = LeNet()
 
     net = net.to(device)
     if device == 'cuda':
-        net = torch.nn.DataParallel(net)
+        #net = torch.nn.DataParallel(net)
         cudnn.benchmark = False#True
 
     criterion = nn.CrossEntropyLoss()
@@ -137,9 +152,11 @@ if __name__ == '__main__':
 
 
     trainset = torchvision.datasets.CIFAR10(root='../storage/data', train=True, download=True, transform=transform_train)
-    train_sampler = BatchLossBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size, criterion=nn.CrossEntropyLoss, interval=args.interval,  descending=args.descending)
-    trainloader = torch.utils.data.DataLoader(trainset, num_workers=0, batch_sampler=train_sampler)
-    # trainloader = torch.utils.data.DataLoader(trainset, num_workers=4, batch_size = args.batch_size)
+    if args.normal:
+        trainloader = torch.utils.data.DataLoader(trainset, num_workers=4, batch_size = args.batch_size)
+    else:
+        train_sampler = BatchLossBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size, criterion=nn.CrossEntropyLoss, interval=args.interval,  descending=args.descending)
+        trainloader = torch.utils.data.DataLoader(trainset, num_workers=0, batch_sampler=train_sampler)
 
     testset = torchvision.datasets.CIFAR10(root='../storage/data', train=False, download=True, transform=transform_test)
     testloader = torch.utils.data.DataLoader(testset, batch_size=args.test_batch_size, shuffle=False, num_workers=2)
@@ -150,9 +167,22 @@ if __name__ == '__main__':
     if args.resume:
         # Load checkpoint.
         print('==> Resuming from checkpoint..')
-        assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-        checkpoint = torch.load('./checkpoint/ckpt.t7')
-        net.load_state_dict(checkpoint['net'])
+        if args.from_normal_chk == "":
+            chk = "ckpt.t7"
+            assert os.path.isdir('../artifacts/checkpoint/Convergence/'+net.__class__.__name__), 'Error: no checkpoint directory found!'
+            checkpoint = torch.load('../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'/'+chk)
+        else:
+            chk = 'ckpt_epoch_'+args.from_normal_chk+'.t7'
+            assert os.path.isdir('../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'_normal'), 'Error: no checkpoint directory found!'
+            checkpoint = torch.load('../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'_normal/'+chk)
+        
+        from collections import OrderedDict
+        new_state_dict = OrderedDict()
+        for k, v in checkpoint["net"].items():
+            name = k.replace("module.", "", 1) # remove `module.`
+            new_state_dict[name] = v
+
+        net.load_state_dict(new_state_dict)
         best_acc = checkpoint['acc']
         start_epoch = checkpoint['epoch']
 
