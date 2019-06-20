@@ -142,7 +142,7 @@ if __name__ == '__main__':
         cudnn.benchmark = False#True
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.min_weight_decay, nesterov=True)
     scheduler = MultiStepLR(optimizer, milestones=[150,250], gamma=0.1)
 
     # Data
