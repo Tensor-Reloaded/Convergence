@@ -43,7 +43,7 @@ def train(epoch):
 
         update_progress_bar(progress_bar_obj, index=batch_idx + 1, loss=(train_loss / (batch_idx + 1)),acc=(correct / total) * 100, c=correct, t=total)
 
-def test(epoch):
+def test(epoch, normal=False):
     global best_acc
     print('\nTest')
     net.eval()
@@ -68,15 +68,15 @@ def test(epoch):
     # Save checkpoint.
     acc = 100.*correct/total
 
-    if epoch in [0,50,100,150,200]:
-        if not os.path.isdir('../artifacts/checkpoint/Convergence/'+net.__class__.__name__):
-                os.makedirs('../artifacts/checkpoint/Convergence/'+net.__class__.__name__, exist_ok=True)
+    if normal and epoch in [0,50,100,150,200,250,300,350]:
+        if not os.path.isdir('../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'_normal'):
+                os.makedirs('../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'_normal', exist_ok=True)
         state = {
             'net': net.state_dict(),
             'acc': acc,
             'epoch': epoch,
         }
-        torch.save(state, '../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'/ckpt_epoch_'+str(epoch)+'.t7')
+        torch.save(state, '../artifacts/checkpoint/Convergence/'+net.__class__.__name__+'_normal/ckpt_epoch_'+str(epoch)+'.t7')
 
     if acc > best_acc:
         print('\nSaving..')
@@ -189,4 +189,4 @@ if __name__ == '__main__':
     for epoch in range(start_epoch, start_epoch+args.n_epoch):
         scheduler.step()
         train(epoch)
-        test(epoch)
+        test(epoch,normal=args.normal)
