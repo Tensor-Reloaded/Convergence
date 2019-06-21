@@ -25,12 +25,15 @@ def train(epoch):
     print('\nEpoch: %d' % (epoch + 1))
     print('Train')
     net.train()
+    total_train_loss = 0.0
     train_loss = 0
     correct = 0
     total = 0
+    batches_count = 0
 
     for batch_idx, (inputs, targets) in enumerate(trainloader):
         inputs, targets = inputs.to(device), targets.to(device)
+        batches_count += 1
         optimizer.zero_grad()
         outputs = net(inputs)
         loss = criterion(outputs, targets)
@@ -42,28 +45,32 @@ def train(epoch):
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
         
-        accuracy = correct / total
-        train_loss = total_train_loss / batches_count
-        print("Batches count: ", batches_count)
-        print("Acc : {}, loss : {}".format(accuracy, train_loss))
-        add_chart_point('trainAcc', epoch, accuracy)
-        add_chart_point('trainLoss', epoch, train_loss)
+    accuracy = correct / total
+    train_loss = total_train_loss / batches_count
+    print("Batches count: ", batches_count)
+    print("Acc : {}, loss : {}".format(accuracy, train_loss))
+    add_chart_point('trainAcc', epoch, accuracy)
+    add_chart_point('trainLoss', epoch, train_loss)
 
 def test(epoch, normal=False):
     global best_acc
     print('\nTest')
     net.eval()
+    total_test_loss = 0.0
     test_loss = 0
     correct = 0
     total = 0
+    count = 0
+
     with torch.no_grad():
         progress_bar_obj = get_progress_bar(len(testloader))
         for batch_idx, (inputs, targets) in enumerate(testloader):
             inputs, targets = inputs.to(device), targets.to(device)
+            count += 1
             outputs = net(inputs)
             loss = criterion(outputs, targets)
 
-            test_loss += loss.item()
+            total_test_loss += loss.item()
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
@@ -111,6 +118,7 @@ if __name__ == '__main__':
     parser.add_argument('--model', default="VGG('VGG19')", type=str, help='what model to use')
     parser.add_argument('--test_batch_size', default=1024, type=float, help='test batch size')
     parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
+    parser.add_argument('--weight_decay', '--wd', default=0.0, type=float, help='weight decay')
     parser.add_argument('--n_epoch', default=350, type=int, help='the number of epochs to train the model')
     parser.add_argument('--interval', default=1, type=int, help='the interval when to recalculate and sort the samples')
     parser.add_argument('--descending', default=True, type=bool, help='True if the samples should be sorted descendingly based on the chosen metric')
@@ -140,9 +148,7 @@ if __name__ == '__main__':
     begin_per_epoch_chart('testLoss')
     begin_per_epoch_chart('trainAcc')
     begin_per_epoch_chart('trainLoss')
-    begin_per_epoch_chart('batchSize')
     begin_per_epoch_chart('lr')
-    begin_per_epoch_chart('wd')
     begin_per_epoch_chart('weights_norm')
 
     # Model
@@ -178,7 +184,7 @@ if __name__ == '__main__':
                     layer.float()
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.min_weight_decay, nesterov=True)
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay, nesterov=True)
     scheduler = MultiStepLR(optimizer, milestones=[150,250], gamma=0.1)
 
     # Data
@@ -233,11 +239,8 @@ if __name__ == '__main__':
 
     for epoch in range(start_epoch, start_epoch+args.n_epoch):
         print()
-        print("Current batch size: ", bs_lr_scheduler.get_bs())
-        print("Current learning rate: ", bs_lr_scheduler.get_lr())
-        add_chart_point('batchSize', epoch, bs_lr_scheduler.get_bs())
-        add_chart_point('lr', epoch, bs_lr_scheduler.get_lr()[0])
-        add_chart_point('wd', epoch, bs_lr_scheduler.get_wd()[0])
+        print("Current learning rate: ", scheduler.get_lr())
+        add_chart_point('lr', epoch, scheduler.get_lr()[0])
         add_chart_point('weights_norm', epoch, compute_weights_l1_norm(net))
 
         scheduler.step()
