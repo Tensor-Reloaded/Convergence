@@ -13,6 +13,8 @@ import torchvision.transforms as transforms
 
 import os
 import argparse
+import time
+import warnings
 
 from models import *
 from learning_utils.utils import *
@@ -26,7 +28,7 @@ def train(epoch):
     train_loss = 0
     correct = 0
     total = 0
-    progress_bar_obj = get_progress_bar(len(trainloader))
+
     for batch_idx, (inputs, targets) in enumerate(trainloader):
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
@@ -66,8 +68,6 @@ def test(epoch, normal=False):
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
 
-            
-
     accuracy = correct / total
     test_loss = total_test_loss / count
     print("Acc : {}, loss : {}".format(accuracy, test_loss))
@@ -97,6 +97,10 @@ def test(epoch, normal=False):
         if not os.path.isdir('../storage/Convergence/checkpoint/'+net.__class__.__name__):
             os.makedirs('../storage/Convergence/checkpoint/'+net.__class__.__name__, exist_ok=True)
         torch.save(state, '../storage/Convergence/checkpoint/'+net.__class__.__name__+'/ckpt.t7')
+
+        if not os.path.isdir('../artifacts/Convergence/checkpoint/'+net.__class__.__name__):
+            os.makedirs('../artifacts/Convergence/checkpoint/'+net.__class__.__name__, exist_ok=True)
+        torch.save(state, '../artifacts/Convergence/checkpoint/'+net.__class__.__name__+'/ckpt.t7')
         best_acc = acc
 
 if __name__ == '__main__':
@@ -104,6 +108,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
     parser.add_argument('--batch_size', default=128, type=float, help='batch size')
+    parser.add_argument('--model', default="VGG('VGG19')", type=str, help='what model to use')
     parser.add_argument('--test_batch_size', default=1024, type=float, help='test batch size')
     parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
     parser.add_argument('--n_epoch', default=350, type=int, help='the number of epochs to train the model')
@@ -111,17 +116,38 @@ if __name__ == '__main__':
     parser.add_argument('--descending', default=True, type=bool, help='True if the samples should be sorted descendingly based on the chosen metric')
     parser.add_argument('--normal', '-n', action='store_true', help='do the trainig using a normal random shuffle dataloader')
     parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
+    parser.add_argument('--half', '-hf', action='store_true', help='use half precision')
     parser.add_argument('--from_normal_chk', default="", type=str, help='True if the samples should be sorted descendingly based on the chosen metric')
-    
+    parser.add_argument('--num_workers_train', default=0, type=int, help='number of workers for loading train data')
+    parser.add_argument('--num_workers_test', default=2, type=int, help='number of workers for loading test data')
+
     args = parser.parse_args()
+
+    if args.half:
+        print("Using half precision")
+
+    if args.normal and args.num_workers_train == 0:
+        warnings.warn(f'num_workers_train is 0')
+
+    if args.num_workers_test == 0:
+        warnings.warn(f'num_workers_test is 0')
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     best_acc = 0  # best test accuracy
     start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
+    begin_per_epoch_chart('testAcc')
+    begin_per_epoch_chart('testLoss')
+    begin_per_epoch_chart('trainAcc')
+    begin_per_epoch_chart('trainLoss')
+    begin_per_epoch_chart('batchSize')
+    begin_per_epoch_chart('lr')
+    begin_per_epoch_chart('wd')
+    begin_per_epoch_chart('weights_norm')
 
     # Model
     print('==> Building model..')
+    net = eval(args.model)
     # net = VGG('VGG19')
     # net = ResNet18()
     # net = PreActResNet18()
@@ -133,13 +159,23 @@ if __name__ == '__main__':
     # net = DPN92()
     # net = ShuffleNetG2()
     # net = SENet18()
-    net = VGG("VGG19")
+    #net = VGG("VGG19")
     # net = LeNet()
+
+    print(net)
 
     net = net.to(device)
     if device == 'cuda':
-        #net = torch.nn.DataParallel(net)
-        cudnn.benchmark = False#True
+        if torch.cuda.device_count() > 1:
+            net = torch.nn.DataParallel(net)
+            print('Using multiple GPUs')
+        cudnn.benchmark = True
+
+        if args.half:
+            net.half()  # convert to half precision
+            for layer in net.modules():
+                if isinstance(layer, nn.BatchNorm2d):
+                    layer.float()
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.min_weight_decay, nesterov=True)
@@ -196,6 +232,14 @@ if __name__ == '__main__':
         start_epoch = checkpoint['epoch']
 
     for epoch in range(start_epoch, start_epoch+args.n_epoch):
+        print()
+        print("Current batch size: ", bs_lr_scheduler.get_bs())
+        print("Current learning rate: ", bs_lr_scheduler.get_lr())
+        add_chart_point('batchSize', epoch, bs_lr_scheduler.get_bs())
+        add_chart_point('lr', epoch, bs_lr_scheduler.get_lr()[0])
+        add_chart_point('wd', epoch, bs_lr_scheduler.get_wd()[0])
+        add_chart_point('weights_norm', epoch, compute_weights_l1_norm(net))
+
         scheduler.step()
         train(epoch)
         test(epoch,normal=args.normal)
