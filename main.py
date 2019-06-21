@@ -118,7 +118,7 @@ if __name__ == '__main__':
     parser.add_argument('--model', default="VGG('VGG19')", type=str, help='what model to use')
     parser.add_argument('--test_batch_size', default=1024, type=float, help='test batch size')
     parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
-    parser.add_argument('--weight_decay', '--wd', default=0.0, type=float, help='weight decay')
+    parser.add_argument('--weight_decay', '--wd', default=0.0002, type=float, help='weight decay')
     parser.add_argument('--n_epoch', default=350, type=int, help='the number of epochs to train the model')
     parser.add_argument('--interval', default=1, type=int, help='the interval when to recalculate and sort the samples')
     parser.add_argument('--descending', default=True, type=bool, help='True if the samples should be sorted descendingly based on the chosen metric')
