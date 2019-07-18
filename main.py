@@ -121,11 +121,11 @@ if __name__ == '__main__':
     parser.add_argument('--weight_decay', '--wd', default=0.0002, type=float, help='weight decay')
     parser.add_argument('--n_epoch', default=350, type=int, help='the number of epochs to train the model')
     parser.add_argument('--interval', default=1, type=int, help='the interval when to recalculate and sort the samples')
-    parser.add_argument('--descending', default=True, type=bool, help='True if the samples should be sorted descendingly based on the chosen metric')
+    parser.add_argument('--descending', action='store_true', help='True if the samples should be sorted descendingly based on the chosen metric')
     parser.add_argument('--normal', '-n', action='store_true', help='do the trainig using a normal random shuffle dataloader')
     parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
     parser.add_argument('--half', '-hf', action='store_true', help='use half precision')
-    parser.add_argument('--from_normal_chk', default="", type=str, help='True if the samples should be sorted descendingly based on the chosen metric')
+    parser.add_argument('--from_chk', default="", type=str, help='True if the samples should be sorted descendingly based on the chosen metric')
     parser.add_argument('--num_workers_train', default=0, type=int, help='number of workers for loading train data')
     parser.add_argument('--num_workers_test', default=2, type=int, help='number of workers for loading test data')
 
@@ -206,7 +206,8 @@ if __name__ == '__main__':
     if args.normal:
         trainloader = torch.utils.data.DataLoader(trainset, num_workers=4, batch_size = args.batch_size)
     else:
-        train_sampler = BatchLossBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size, criterion=nn.CrossEntropyLoss, interval=args.interval,  descending=args.descending)
+        #train_sampler = BatchLossBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size, criterion=nn.CrossEntropyLoss, interval=args.interval,  descending=args.descending)
+        train_sampler = ConfidenceBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size, interval=args.interval,  descending=args.descending)
         trainloader = torch.utils.data.DataLoader(trainset, num_workers=0, batch_sampler=train_sampler)
 
     testset = torchvision.datasets.CIFAR10(root='../storage/data', train=False, download=True, transform=transform_test)
@@ -218,12 +219,15 @@ if __name__ == '__main__':
     if args.resume:
         # Load checkpoint.
         print('==> Resuming from checkpoint..')
-        if args.from_normal_chk == "":
-            chk = "ckpt.t7"
+        if args.normal:
+            if args.from_chk == "":
+                chk = "ckpt.t7"
+            else:
+                chk = 'ckpt_epoch_'+args.from_chk+'.t7'
             assert os.path.isdir('../storage/Convergence/checkpoint/'+net.__class__.__name__), 'Error: no checkpoint directory found!'
             checkpoint = torch.load('../storage/Convergence/checkpoint/'+net.__class__.__name__+'/'+chk)
         else:
-            chk = 'ckpt_epoch_'+args.from_normal_chk+'.t7'
+            chk = 'ckpt_epoch_'+args.from_chk+'.t7'
             assert os.path.isdir('../storage/Convergence/checkpoint/'+net.__class__.__name__+'_normal'), 'Error: no checkpoint directory found!'
             checkpoint = torch.load('../storage/Convergence/checkpoint/'+net.__class__.__name__+'_normal/'+chk)
         
