@@ -89,7 +89,7 @@ class BatchLossBasedShuffler(BatchSampler):
 
 class ConfidenceBasedShuffler(BatchSampler):
     
-    def __init__(self, data_source, net, batch_size, drop_last=False, interval = 1, descending = True):
+    def __init__(self, data_source, net, batch_size, drop_last=False, interval = 1, descending = True,aux_batch_size=1000):
 
         self.data_source = data_source
         self.data = torch.FloatTensor(self.data_source.data).transpose(1,-1)
@@ -99,6 +99,7 @@ class ConfidenceBasedShuffler(BatchSampler):
         self.drop_last = drop_last
         self.interval = interval
         self.descending = descending
+        self.aux_batch_size = aux_batch_size
 
         self._num_samples = None
         self.device = 'cuda' if next(self.net.parameters()).is_cuda else 'cpu'
@@ -122,7 +123,7 @@ class ConfidenceBasedShuffler(BatchSampler):
 
 
     def compute_confidences(self):
-        aux_batch_size = 1000
+        aux_batch_size = self.aux_batch_size
         self.net.eval()
         confidences = []
         with torch.no_grad():

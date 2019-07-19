@@ -115,6 +115,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
     parser.add_argument('--batch_size', default=128, type=float, help='batch size')
+    parser.add_argument('--aux_batch_size', default=1000, type=float, help='batch size for the Convergence shuffler/sampler to use')
     parser.add_argument('--model', default="VGG('VGG19')", type=str, help='what model to use')
     parser.add_argument('--test_batch_size', default=1024, type=float, help='test batch size')
     parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
@@ -206,8 +207,8 @@ if __name__ == '__main__':
     if args.normal:
         trainloader = torch.utils.data.DataLoader(trainset, num_workers=4, batch_size = args.batch_size)
     else:
-        #train_sampler = BatchLossBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size, criterion=nn.CrossEntropyLoss, interval=args.interval,  descending=args.descending)
-        train_sampler = ConfidenceBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size, interval=args.interval,  descending=args.descending)
+        #train_sampler = BatchLossBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size,aux_batch_size=args.aux_batch_size, criterion=nn.CrossEntropyLoss, interval=args.interval,  descending=args.descending)
+        train_sampler = ConfidenceBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size,aux_batch_size=args.aux_batch_size, interval=args.interval,  descending=args.descending)
         trainloader = torch.utils.data.DataLoader(trainset, num_workers=0, batch_sampler=train_sampler)
 
     testset = torchvision.datasets.CIFAR10(root='../storage/data', train=False, download=True, transform=transform_test)
