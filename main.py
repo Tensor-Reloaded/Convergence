@@ -184,7 +184,7 @@ if __name__ == '__main__':
                     layer.float()
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay, nesterov=True)
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = MultiStepLR(optimizer, milestones=[150,250], gamma=0.1)
 
     # Data
