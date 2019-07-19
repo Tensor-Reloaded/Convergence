@@ -114,8 +114,8 @@ if __name__ == '__main__':
     reset_seed(666)
 
     parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
-    parser.add_argument('--batch_size', default=128, type=float, help='batch size')
-    parser.add_argument('--aux_batch_size', default=1000, type=float, help='batch size for the Convergence shuffler/sampler to use')
+    parser.add_argument('--batch_size', default=128, type=int, help='batch size')
+    parser.add_argument('--aux_batch_size', default=1000, type=int, help='batch size for the Convergence shuffler/sampler to use')
     parser.add_argument('--model', default="VGG('VGG19')", type=str, help='what model to use')
     parser.add_argument('--test_batch_size', default=1024, type=float, help='test batch size')
     parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
