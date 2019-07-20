@@ -38,6 +38,8 @@ def train(epoch):
         outputs = net(inputs)
         loss = criterion(outputs, targets)
         loss.backward()
+        if args.grad_clip != None:
+            torch.nn.utils.clip_grad_value_(net.parameters(),args.grad_clip)
         optimizer.step()
 
         total_train_loss += loss.item()
@@ -129,6 +131,7 @@ if __name__ == '__main__':
     parser.add_argument('--from_chk', default="", type=str, help='True if the samples should be sorted descendingly based on the chosen metric')
     parser.add_argument('--num_workers_train', default=0, type=int, help='number of workers for loading train data')
     parser.add_argument('--num_workers_test', default=2, type=int, help='number of workers for loading test data')
+    parser.add_argument('--grad_clip', default=None, type=float, help='The value to which to clip the gradients to')
 
     args = parser.parse_args()
 
