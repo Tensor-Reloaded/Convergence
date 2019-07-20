@@ -223,7 +223,7 @@ if __name__ == '__main__':
     if args.resume:
         # Load checkpoint.
         print('==> Resuming from checkpoint..')
-        if args.normal:
+        if not args.normal:
             if args.from_chk == "":
                 chk = "ckpt.t7"
             else:
@@ -231,7 +231,10 @@ if __name__ == '__main__':
             assert os.path.isdir('../storage/Convergence/checkpoint/'+net.__class__.__name__), 'Error: no checkpoint directory found!'
             checkpoint = torch.load('../storage/Convergence/checkpoint/'+net.__class__.__name__+'/'+chk)
         else:
-            chk = 'ckpt_epoch_'+args.from_chk+'.t7'
+            if args.from_chk == "":
+                chk = "ckpt.t7"
+            else:    
+                chk = 'ckpt_epoch_'+args.from_chk+'.t7'
             assert os.path.isdir('../storage/Convergence/checkpoint/'+net.__class__.__name__+'_normal'), 'Error: no checkpoint directory found!'
             checkpoint = torch.load('../storage/Convergence/checkpoint/'+net.__class__.__name__+'_normal/'+chk)
         
