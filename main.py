@@ -39,7 +39,7 @@ def train(epoch):
         loss = criterion(outputs, targets)
         loss.backward()
         if args.grad_clip != None:
-            torch.nn.utils.clip_grad_value_(net.parameters(),args.grad_clip)
+            torch.nn.utils.clip_grad_norm_(net.parameters(),args.grad_clip)
         optimizer.step()
 
         total_train_loss += loss.item()
@@ -132,6 +132,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_workers_train', default=0, type=int, help='number of workers for loading train data')
     parser.add_argument('--num_workers_test', default=2, type=int, help='number of workers for loading test data')
     parser.add_argument('--grad_clip', default=None, type=float, help='The value to which to clip the gradients to')
+    parser.add_argument('--epoch_skip', default=0, type=int, help='How many epochs to train normaly before using the special sampler')
 
     args = parser.parse_args()
 
@@ -210,8 +211,8 @@ if __name__ == '__main__':
     if args.normal:
         trainloader = torch.utils.data.DataLoader(trainset, num_workers=4, batch_size = args.batch_size)
     else:
-        #train_sampler = BatchLossBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size,aux_batch_size=args.aux_batch_size, criterion=nn.CrossEntropyLoss, interval=args.interval,  descending=args.descending)
-        train_sampler = ConfidenceBasedShuffler(data_source=trainset, net=net, batch_size=args.batch_size,aux_batch_size=args.aux_batch_size, interval=args.interval,  descending=args.descending)
+        # train_sampler = BatchLossBasedShuffler(data_source=trainset, net=net,epoch_skip=args.epoch_skip, batch_size=args.batch_size,aux_batch_size=args.aux_batch_size, criterion=nn.CrossEntropyLoss, interval=args.interval,  descending=args.descending)
+        train_sampler = ConfidenceBasedShuffler(data_source=trainset, net=net,epoch_skip=args.epoch_skip, batch_size=args.batch_size,aux_batch_size=args.aux_batch_size, interval=args.interval,  descending=args.descending)
         trainloader = torch.utils.data.DataLoader(trainset, num_workers=0, batch_sampler=train_sampler)
 
     testset = torchvision.datasets.CIFAR10(root='../storage/data', train=False, download=True, transform=transform_test)

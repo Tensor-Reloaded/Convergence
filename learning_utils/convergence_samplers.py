@@ -4,17 +4,19 @@ from torch.utils.data.sampler import Sampler, BatchSampler
 
 class BatchLossBasedShuffler(BatchSampler):
     
-    def __init__(self, data_source, net, batch_size, criterion=nn.CrossEntropyLoss, drop_last=False, interval = 1, descending = True):
+    def __init__(self, data_source, net,epoch_skip, batch_size, criterion=nn.CrossEntropyLoss, drop_last=False, interval = 1, descending = True,aux_batch_size=1000):
 
         self.data_source = data_source
         self.data = torch.FloatTensor(self.data_source.data).transpose(1,-1)
         self.targets = torch.LongTensor(self.data_source.targets)
         self.net = net
+        self.epoch_skip = epoch_skip
         self.batch_size = batch_size
         self.criterion = criterion(reduction='none')
         self.drop_last = drop_last
         self.interval = interval
         self.descending = descending
+        self.aux_batch_size = aux_batch_size
 
         self._num_samples = None
         self.device = 'cuda' if next(self.net.parameters()).is_cuda else 'cpu'
@@ -38,7 +40,7 @@ class BatchLossBasedShuffler(BatchSampler):
 
 
     def compute_losses(self):
-        aux_batch_size = 1000
+        aux_batch_size = self.aux_batch_size
         self.net.eval()
         losses = []
         with torch.no_grad():
@@ -62,12 +64,15 @@ class BatchLossBasedShuffler(BatchSampler):
 
 
     def __iter__(self):
-        self.unused_indices = torch.arange(self.num_samples).to(self.device)
+        self.epoch_skip -= 1
+        self.unused_indices = torch.randperm(self.num_samples).to(self.device)
+        losses_indices = torch.randperm(len(self.unused_indices))
+
         for batch_idx in range(self.__len__()):
-            if batch_idx % self.interval == 0:
-                losses = self.compute_losses()
-                losses_indices = torch.argsort(losses, descending=self.descending)
-                
+            if batch_idx % self.interval == 0 and self.epoch_skip<0:
+                losses = self.compute_confidences()
+                losses_indices = torch.argsort(losses, descending=not self.descending)
+
             if batch_idx % self.interval == 0:
                 aux_losses_indices = losses_indices[-self.batch_size:]
             else:     
@@ -75,7 +80,7 @@ class BatchLossBasedShuffler(BatchSampler):
 
             for index in aux_losses_indices:
                 self.unused_indices = torch.cat([self.unused_indices[0:index], self.unused_indices[index+1:]])
-            
+            # print(torch.unique(self.targets[aux_losses_indices],return_counts=True))
             yield aux_losses_indices
         del self.unused_indices                
 
@@ -89,12 +94,13 @@ class BatchLossBasedShuffler(BatchSampler):
 
 class ConfidenceBasedShuffler(BatchSampler):
     
-    def __init__(self, data_source, net, batch_size, drop_last=False, interval = 1, descending = True,aux_batch_size=1000):
+    def __init__(self, data_source, net,epoch_skip, batch_size, drop_last=False, interval = 1, descending = True,aux_batch_size=1000):
 
         self.data_source = data_source
         self.data = torch.FloatTensor(self.data_source.data).transpose(1,-1)
         self.targets = torch.LongTensor(self.data_source.targets)
         self.net = net
+        self.epoch_skip = epoch_skip
         self.batch_size = batch_size
         self.drop_last = drop_last
         self.interval = interval
@@ -153,12 +159,15 @@ class ConfidenceBasedShuffler(BatchSampler):
 
 
     def __iter__(self):
-        self.unused_indices = torch.arange(self.num_samples).to(self.device)
+        self.epoch_skip -= 1
+        self.unused_indices = torch.randperm(self.num_samples).to(self.device)
+        losses_indices = torch.randperm(len(self.unused_indices))
+
         for batch_idx in range(self.__len__()):
-            if batch_idx % self.interval == 0:
+            if batch_idx % self.interval == 0 and self.epoch_skip<0:
                 losses = self.compute_confidences()
-                losses_indices = torch.argsort(losses, descending=self.descending)
-                
+                losses_indices = torch.argsort(losses, descending=not self.descending)
+
             if batch_idx % self.interval == 0:
                 aux_losses_indices = losses_indices[-self.batch_size:]
             else:     
@@ -166,7 +175,7 @@ class ConfidenceBasedShuffler(BatchSampler):
 
             for index in aux_losses_indices:
                 self.unused_indices = torch.cat([self.unused_indices[0:index], self.unused_indices[index+1:]])
-            
+            # print(torch.unique(self.targets[aux_losses_indices],return_counts=True))
             yield aux_losses_indices
         del self.unused_indices                
 
