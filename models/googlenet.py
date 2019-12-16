@@ -1,39 +1,37 @@
-'''GoogLeNet with PyTorch.'''
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class Inception(nn.Module):
-    def __init__(self, in_planes, n1x1, n3x3red, n3x3, n5x5red, n5x5, pool_planes):
+    def __init__(self, in_planes, kernel_1_x, kernel_3_in, kernel_3_x, kernel_5_in, kernel_5_x, pool_planes):
         super(Inception, self).__init__()
         # 1x1 conv branch
         self.b1 = nn.Sequential(
-            nn.Conv2d(in_planes, n1x1, kernel_size=1),
-            nn.BatchNorm2d(n1x1),
+            nn.Conv2d(in_planes, kernel_1_x, kernel_size=1),
+            nn.BatchNorm2d(kernel_1_x),
             nn.ReLU(True),
         )
 
         # 1x1 conv -> 3x3 conv branch
         self.b2 = nn.Sequential(
-            nn.Conv2d(in_planes, n3x3red, kernel_size=1),
-            nn.BatchNorm2d(n3x3red),
+            nn.Conv2d(in_planes, kernel_3_in, kernel_size=1),
+            nn.BatchNorm2d(kernel_3_in),
             nn.ReLU(True),
-            nn.Conv2d(n3x3red, n3x3, kernel_size=3, padding=1),
-            nn.BatchNorm2d(n3x3),
+            nn.Conv2d(kernel_3_in, kernel_3_x, kernel_size=3, padding=1),
+            nn.BatchNorm2d(kernel_3_x),
             nn.ReLU(True),
         )
 
         # 1x1 conv -> 5x5 conv branch
         self.b3 = nn.Sequential(
-            nn.Conv2d(in_planes, n5x5red, kernel_size=1),
-            nn.BatchNorm2d(n5x5red),
+            nn.Conv2d(in_planes, kernel_5_in, kernel_size=1),
+            nn.BatchNorm2d(kernel_5_in),
             nn.ReLU(True),
-            nn.Conv2d(n5x5red, n5x5, kernel_size=3, padding=1),
-            nn.BatchNorm2d(n5x5),
+            nn.Conv2d(kernel_5_in, kernel_5_x, kernel_size=3, padding=1),
+            nn.BatchNorm2d(kernel_5_x),
             nn.ReLU(True),
-            nn.Conv2d(n5x5, n5x5, kernel_size=3, padding=1),
-            nn.BatchNorm2d(n5x5),
+            nn.Conv2d(kernel_5_x, kernel_5_x, kernel_size=3, padding=1),
+            nn.BatchNorm2d(kernel_5_x),
             nn.ReLU(True),
         )
 
@@ -65,7 +63,7 @@ class GoogLeNet(nn.Module):
         self.a3 = Inception(192,  64,  96, 128, 16, 32, 32)
         self.b3 = Inception(256, 128, 128, 192, 32, 96, 64)
 
-        self.maxpool = nn.MaxPool2d(3, stride=2, padding=1)
+        self.max_pool = nn.MaxPool2d(3, stride=2, padding=1)
 
         self.a4 = Inception(480, 192,  96, 208, 16,  48,  64)
         self.b4 = Inception(512, 160, 112, 224, 24,  64,  64)
@@ -80,28 +78,19 @@ class GoogLeNet(nn.Module):
         self.linear = nn.Linear(1024, 10)
 
     def forward(self, x):
-        out = self.pre_layers(x)
-        out = self.a3(out)
-        out = self.b3(out)
-        out = self.maxpool(out)
-        out = self.a4(out)
-        out = self.b4(out)
-        out = self.c4(out)
-        out = self.d4(out)
-        out = self.e4(out)
-        out = self.maxpool(out)
-        out = self.a5(out)
-        out = self.b5(out)
-        out = self.avgpool(out)
-        out = out.view(out.size(0), -1)
-        out = self.linear(out)
-        return out
-
-
-def test():
-    net = GoogLeNet()
-    x = torch.randn(1,3,32,32)
-    y = net(x)
-    print(y.size())
-
-# test()
+        x = self.pre_layers(x)
+        x = self.a3(x)
+        x = self.b3(x)
+        x = self.max_pool(x)
+        x = self.a4(x)
+        x = self.b4(x)
+        x = self.c4(x)
+        x = self.d4(x)
+        x = self.e4(x)
+        x = self.max_pool(x)
+        x = self.a5(x)
+        x = self.b5(x)
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        x = self.linear(x)
+        return x

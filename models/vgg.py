@@ -1,5 +1,3 @@
-'''VGG11/13/16/19 in Pytorch.'''
-import torch
 import torch.nn as nn
 
 
@@ -38,10 +36,17 @@ class VGG(nn.Module):
         return nn.Sequential(*layers)
 
 
-def test():
-    net = VGG('VGG11')
-    x = torch.randn(2,3,32,32)
-    y = net(x)
-    print(y.size())
+def VGG11():
+    return VGG('VGG11')
 
-# test()
+
+def VGG13():
+    return VGG('VGG13')
+
+
+def VGG16():
+    return VGG('VGG16')
+
+
+def VGG19():
+    return VGG('VGG19')
