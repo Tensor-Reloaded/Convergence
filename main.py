@@ -20,7 +20,7 @@ CLASSES = ('plane', 'car', 'bird', 'cat', 'deer',
 
 def main():
     parser = argparse.ArgumentParser(description="cifar-10 with PyTorch")
-    parser.add_argument('--model', default="VGG('VGG19')",
+    parser.add_argument('--model', default="PreResNet(depth=56)",
                         type=str, help='what model to use')
     parser.add_argument('--half', '-hf', action='store_true',
                         help='use half precision')
