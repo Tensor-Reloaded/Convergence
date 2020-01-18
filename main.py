@@ -18,6 +18,8 @@ from learn_utils import reset_seed, EarlyStopping
 from misc import progress_bar
 from models import *
 
+from LossBasedSampler.loss_based_sampler import LossBasedShuffler
+
 CIFAR_10_CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 CIFAR_100_CLASSES = (
     'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle', 
@@ -97,10 +99,34 @@ def main():
                         help="In addition to accuracy and loss calculate all metrics available")
     parser.add_argument('--cuda', default=torch.cuda.is_available(),
                         type=bool, help='whether cuda is in use')
+    parser.add_argument('--device_id', default=0,
+                        type=int, help='id of cuda device')
     parser.add_argument('--seed', default=0, type=int,
                         help='Seed to be used by randomizer')
     parser.add_argument('--progress_bar', '-pb',
                         action='store_true', help='Show the progress bar')
+
+    parser.add_argument('--use_custom_sample_order', '-cso', action='store_true', help='Do not use random shuffling, but a selected order strategy')
+    parser.add_argument('--classic_warm_up',
+                        action='store_true', help='Perform classic warmp up at the begining')
+    parser.add_argument('--homogen_probs_warm_up', '-hpo',
+                        action='store_true', help='Perform special warmp up -all samples have same probability for each class- at the begining -make sure your model has no bias, or that the bias is deativated in this phase')
+    parser.add_argument('--eval_batch_size', default=10000,
+                        type=int, help='size of the batch when computing the loss in advance')
+    parser.add_argument('--eval_batch_count', default=5,
+                        type=int, help='number of batches to include when computing the loss in advance. If you want all ds, set a high number')
+    parser.add_argument('--eval_freq', default=1,
+                        type=int, help='after how many batches to re compute the loss in advance')
+    parser.add_argument('--ignore_correct_prediction',
+                        action='store_true', help='If sampled correctly classified should be considered for the next batch')
+
+    parser.add_argument('--selection_strategy', default="ascending",
+                        type=str, help='how to sort by the losses. One of ascending , desceding,alternative')
+
+    parser.add_argument('--with_replacement',
+                        action='store_true',
+                        help='If samples given in an epoch can repeat or not')
+
     args = parser.parse_args()
 
     solver = Solver(args)
@@ -154,35 +180,26 @@ class Solver(object):
         elif self.args.dataset == "CIFAR-100":
             self.train_set = torchvision.datasets.CIFAR100(
                 root='../storage', train=True, download=True, transform=train_transform)
+        if self.args.use_custom_sample_order:
+            lbs = LossBasedShuffler(
+                    batch_size=self.args.train_batch_size,
+                    drop_last=True,
+                    dataset=self.train_set,
+                    model=self.model,
+                    eval_batch_size=self.args.eval_batch_size,
+                    number_of_eval_batches=self.args.eval_batch_count,
+                    eval_freq=self.args.eval_freq,
+                    with_replacement=self.args.with_replacement,
+                    ignore_correct_predictions=self.args.ignore_correct_prediction,
+                    selection_strategy=self.args.selection_strategy,
+                    device=self.device
+                )
 
-        if self.args.train_subset == None:
-            self.train_loader = torch.utils.data.DataLoader(
-                dataset=self.train_set, batch_size=self.args.train_batch_size, shuffle=True)
+            self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_sampler=lbs)
         else:
-            filename = "subset_indices/subset_balanced_{}_{}.data".format(
-                self.dataset, self.args.train_subset)
-            if os.path.isfile(filename):
-                with open(filename, 'rb') as f:
-                    subset_indices = pickle.load(f)
-            else:
-                subset_indices = []
-                per_class = self.args.train_subset//self.nr_classes
-                targets = torch.tensor(self.train_set.targets)
-                for i in range(self.nr_classes):
-                    idx = (targets == i).nonzero().view(-1)
-                    perm = torch.randperm(idx.size(0))[:per_class]
-                    subset_indices += idx[perm].tolist()
-                if not os.path.isdir("subset_indices"):
-                    os.makedirs("subset_indices")
-                with open(filename, 'wb') as f:
-                    pickle.dump(subset_indices, f)
-            subset_indices = torch.LongTensor(subset_indices)
-
             self.train_loader = torch.utils.data.DataLoader(
-                dataset=self.train_set, batch_size=self.args.train_batch_size, sampler=SubsetRandomSampler(subset_indices))
-            if self.args.validate:
-                self.validate_loader = torch.utils.data.DataLoader(
-                    dataset=self.train_set, batch_size=self.args.train_batch_size, sampler=SubsetRandomSampler(subset_indices))
+                dataset=self.train_set, batch_size=self.args.train_batch_size, shuffle=True
+            )
 
         if self.args.dataset == "CIFAR-10":
             test_set = torchvision.datasets.CIFAR10(
@@ -196,7 +213,8 @@ class Solver(object):
 
     def load_model(self):
         if self.cuda:
-            self.device = torch.device('cuda')
+            self.device = torch.device('cuda:'+str(self.args.device_id))
+            print(self.device)
             cudnn.benchmark = True
         else:
             self.device = torch.device('cpu')
@@ -251,7 +269,10 @@ class Solver(object):
         if len(self.args.load_model) > 0:
             print("Loading model from " + self.args.load_model)
             self.model.load_state_dict(torch.load(self.args.load_model))
+
+
         self.model = self.model.to(self.device)
+        # self.model = nn.DataParallel(self.model,[0,1])
 
         self.optimizer = optim.SGD(self.model.parameters(
         ), lr=self.args.lr, momentum=self.args.momentum, weight_decay=self.args.wd, nesterov=self.args.nesterov)
@@ -298,7 +319,7 @@ class Solver(object):
             prediction = torch.max(output, 1)
             total += target.size(0)
 
-            correct += torch.sum(prediction[1] == target)
+            correct += torch.sum(prediction[1] == target).item()
 
             pred_labels = torch.nn.functional.one_hot(
                 prediction[1], num_classes=10)
@@ -347,7 +368,7 @@ class Solver(object):
                 prediction = torch.max(output, 1)
                 total += target.size(0)
 
-                correct += torch.sum(prediction[1] == target)
+                correct += torch.sum(prediction[1] == target).item()
 
                 pred_labels = torch.nn.functional.one_hot(
                     prediction[1], num_classes=10)
@@ -385,8 +406,9 @@ class Solver(object):
 
     def run(self):
         reset_seed(self.args.seed)
-        self.load_data()
         self.load_model()
+        self.load_data()
+
 
         best_accuracy = 0
         try:
