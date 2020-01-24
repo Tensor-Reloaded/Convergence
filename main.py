@@ -166,10 +166,8 @@ class Solver(object):
             normalize = transforms.Normalize(
                 mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-            train_transform = transforms.Compose([transforms.RandomHorizontalFlip(
-            ), transforms.RandomCrop(32, 4), transforms.ToTensor(), normalize])
-            test_transform = transforms.Compose(
-                [transforms.ToTensor(), normalize])
+            train_transform = normalize
+            test_transform = normalize
         else:
             train_transform = transforms.Compose([transforms.ToTensor()])
             test_transform = transforms.Compose([transforms.ToTensor()])
