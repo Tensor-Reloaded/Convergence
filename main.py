@@ -19,6 +19,7 @@ from misc import progress_bar
 from models import *
 
 from LossBasedSampler.loss_based_sampler import LossBasedShuffler
+from LossBasedSampler.bottleneck_based_sampler import BottleneckBasedShuffler
 
 CIFAR_10_CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 CIFAR_100_CLASSES = (
@@ -148,7 +149,7 @@ class Solver(object):
         if self.args.save_dir == "" or self.args.save_dir == None:
             self.writer = SummaryWriter()
         else:
-            self.writer = SummaryWriter(log_dir="runs/"+self.args.save_dir)
+            self.writer = SummaryWriter(logdir="runs/"+self.args.save_dir)
             with open("runs/"+self.args.save_dir+"/README.md", 'w+') as f:
                 f.write(' '.join(sys.argv[1:]))
         self.batch_plot_idx = 0
@@ -166,8 +167,8 @@ class Solver(object):
             normalize = transforms.Normalize(
                 mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-            train_transform = normalize
-            test_transform = normalize
+            train_transform = transforms.Compose([transforms.ToTensor(), normalize])
+            test_transform = transforms.Compose([transforms.ToTensor(), normalize])
         else:
             train_transform = transforms.Compose([transforms.ToTensor()])
             test_transform = transforms.Compose([transforms.ToTensor()])
@@ -179,19 +180,33 @@ class Solver(object):
             self.train_set = torchvision.datasets.CIFAR100(
                 root='../storage', train=True, download=True, transform=train_transform)
         if self.args.use_custom_sample_order:
-            lbs = LossBasedShuffler(
-                    batch_size=self.args.train_batch_size,
-                    drop_last=True,
-                    dataset=self.train_set,
-                    model=self.model,
-                    eval_batch_size=self.args.eval_batch_size,
-                    number_of_eval_batches=self.args.eval_batch_count,
-                    eval_freq=self.args.eval_freq,
-                    with_replacement=self.args.with_replacement,
-                    ignore_correct_predictions=self.args.ignore_correct_prediction,
-                    selection_strategy=self.args.selection_strategy,
-                    device=self.device
-                )
+            # lbs = LossBasedShuffler(
+            #         batch_size=self.args.train_batch_size,
+            #         drop_last=True,
+            #         dataset=self.train_set,
+            #         model=self.model,
+            #         eval_batch_size=self.args.eval_batch_size,
+            #         number_of_eval_batches=self.args.eval_batch_count,
+            #         eval_freq=self.args.eval_freq,
+            #         with_replacement=self.args.with_replacement,
+            #         ignore_correct_predictions=self.args.ignore_correct_prediction,
+            #         selection_strategy=self.args.selection_strategy,
+            #         device=self.device
+            #     )
+
+            lbs = BottleneckBasedShuffler(
+                batch_size=self.args.train_batch_size,
+                drop_last=True,
+                dataset=self.train_set,
+                model=self.model,
+                eval_batch_size=self.args.eval_batch_size,
+                number_of_eval_batches=self.args.eval_batch_count,
+                eval_freq=self.args.eval_freq,
+                with_replacement=self.args.with_replacement,
+                ignore_correct_predictions=self.args.ignore_correct_prediction,
+                device=self.device,
+                last_updates_count=-1
+            )
 
             self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_sampler=lbs)
         else:
@@ -218,6 +233,7 @@ class Solver(object):
             self.device = torch.device('cpu')
 
         self.model = eval(self.args.model)
+        self.model = BottleneckModel(self.model, 16)
         self.save_dir = "../storage/" + self.args.save_dir
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
