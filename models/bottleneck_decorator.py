@@ -9,12 +9,13 @@ class BottleneckModel(nn.Module):
         assert isinstance(originalModule.classifier, nn.Linear)
         self.bottleneck = nn.Sequential(
             nn.Linear(originalModule.classifier.in_features, bottleneck_size),
-            nn.ReLU()
+            nn.ReLU(),
+            nn.BatchNorm1d(bottleneck_size)
         )
 
         self.classifier = nn.Sequential(
             nn.Linear(bottleneck_size, originalModule.classifier.out_features),
-            nn.ReLU()
+            nn.ReLU(),
         )
 
         originalModule.classifier = nn.Identity() #do nothing just forward input

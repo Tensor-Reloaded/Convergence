@@ -203,9 +203,7 @@ class Solver(object):
                 number_of_eval_batches=self.args.eval_batch_count,
                 eval_freq=self.args.eval_freq,
                 with_replacement=self.args.with_replacement,
-                ignore_correct_predictions=self.args.ignore_correct_prediction,
                 device=self.device,
-                last_updates_count=-1
             )
 
             self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_sampler=lbs)

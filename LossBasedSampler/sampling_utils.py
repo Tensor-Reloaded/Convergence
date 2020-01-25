@@ -1,9 +1,7 @@
 import torch
 import torch.nn as nn
-from torch.utils.data.sampler import Sampler, BatchSampler, SubsetRandomSampler
-from torchvision import datasets, transforms
 from torch.utils.data import Dataset, DataLoader
-
+import numpy as np
 
 
 class IndexDataset(Dataset):
@@ -61,9 +59,65 @@ class SelectionByBottleneckReprDelta:
 
 
 class UniformSamplingByReprDeltas(SelectionByBottleneckReprDelta):
-    def __init__(self):
+    def __init__(self, batch_size):
         '''Same as the initialization of kmeans++'''
-        pass
+        self.batch_size = batch_size
+        self.dist = nn.PairwiseDistance(p=2)
 
     def get_order(self, repr_deltas, idxs):
-        pass
+        total_num_batches = len(idxs) // self.batch_size
+        batches = []
+        dists = self.compute_dist_matrix(repr_deltas).cpu().numpy()
+
+        while len(batches) < total_num_batches:
+            curr_batch_idxs = []
+            curr_batch_idxs.append(np.random.randint(low=0, high= repr_deltas.size(0),size=1))
+
+            while len(curr_batch_idxs) < self.batch_size:
+                candidates = []
+                candidates_scores = []
+                for i in range(repr_deltas.size(0)):
+                    if i not in curr_batch_idxs:
+                        candidates.append(i)
+                        score = 0
+                        for already_added_idx in curr_batch_idxs:
+                            score += dists[i, already_added_idx]
+                        candidates_scores.append(score)
+
+                sel_candidate = np.random.choice(candidates, size=1, p=candidates_scores)
+                curr_batch_idxs.append(idxs[sel_candidate])
+
+            batches.append(curr_batch_idxs)
+
+            to_keep_idxs = idxs[idxs not in curr_batch_idxs]
+            idxs = idxs[to_keep_idxs]
+            repr_deltas = repr_deltas[to_keep_idxs]
+
+        return batches
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    def compute_dist_matrix(self, repr_deltas):
+        r = repr_deltas.clone()
+        return (r.unsqueeze(1) - r.unsqueeze(0)).pow(2).sum(-1)
+
+
+

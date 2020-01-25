@@ -8,18 +8,17 @@ class BottleneckBasedShuffler(BatchSampler):
     def __init__(self, batch_size, dataset, drop_last, model: BottleneckModel, eval_batch_size, number_of_eval_batches,
                  eval_freq=1,
                  with_replacement=False,
-                 last_updates_count=-1, ignore_correct_predictions=False, device='cuda'):
+                 num_epochs_to_reinitialize_repr=3, device='cuda'):
         '''
         :param batch_size: Size of the actual batch .
         :param dataset: Dataset to compute the loss from. Most probably trainset.
         :param eval_batch_size: Size of the batch used when evaluating future samples.
         :param number_of_eval_batches: Maximum number of evaluation batches. If set high enough, all dataset is evaluated.
         :param eval_freq: Number of batches sampled after which losses should be recomputed
-        :param last_updates_count: Number of updates to use to complete delta from per sample. If -1, the initial value will be used
         :param sort_ascending: If the next batch should be the samples with small or high loss
         '''
 
-        self.last_updates_count = last_updates_count
+        self.num_epochs_to_reinitialize_repr = num_epochs_to_reinitialize_repr
         self.drop_last = drop_last
         self.with_replacement = with_replacement
         self.device = device
@@ -30,7 +29,6 @@ class BottleneckBasedShuffler(BatchSampler):
                              "but got batch_size={}".format(batch_size))
         self.batch_size = batch_size
 
-        self.ignore_correct_predictions = ignore_correct_predictions
         self.eval_freq = eval_freq
         self.number_of_eval_batches = number_of_eval_batches
         self.eval_batch_size = eval_batch_size
@@ -38,15 +36,13 @@ class BottleneckBasedShuffler(BatchSampler):
         self.criterion = nn.CrossEntropyLoss(reduction='none')
         self.learned_deltas = torch.zeros([self.dataset.__len__(), self.model.bottleneck_size], device=self.device)
         self.starting_representation = None
-        self.first_batch_first_epoch = True
 
         self.sel_strategy = UniformSamplingByReprDeltas()
+        self.epoch = 0
 
     def __iter__(self):
         self.sorted_idxs = torch.randperm(len(self.dataset))
         self.batches_delivered_since_evaluation = 0
-
-
 
         while self.sorted_idxs.size(0) >= self.batch_size:
             if self.batches_delivered_since_evaluation % self.eval_freq == 0:
@@ -63,8 +59,7 @@ class BottleneckBasedShuffler(BatchSampler):
                                                               pin_memory=True,
                                                               num_workers=2
                                                               )
-                if self.first_batch_first_epoch:
-                    self.first_batch_first_epoch = False
+                if self.epoch % self.num_epochs_to_reinitialize_repr:
                     yield self.sorted_idxs[:self.batch_size]
                     self.sorted_idxs = self.sorted_idxs[self.batch_size:]
                     self.batches_delivered_since_evaluation += 1
