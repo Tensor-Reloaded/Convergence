@@ -43,7 +43,7 @@ class BottleneckBasedShuffler(BatchSampler):
     def __iter__(self):
         self.sorted_idxs = torch.randperm(len(self.dataset))
         self.batches_delivered_since_evaluation = 0
-
+        first_batch = True
         while self.sorted_idxs.size(0) >= self.batch_size:
             if self.batches_delivered_since_evaluation % self.eval_freq == 0:
                 if not self.with_replacement:
@@ -59,7 +59,9 @@ class BottleneckBasedShuffler(BatchSampler):
                                                               pin_memory=True,
                                                               num_workers=2
                                                               )
-                if self.epoch % self.num_epochs_to_reinitialize_repr:
+                if self.epoch % self.num_epochs_to_reinitialize_repr == 0 and first_batch:
+                    first_batch = False
+
                     yield self.sorted_idxs[:self.batch_size]
                     self.sorted_idxs = self.sorted_idxs[self.batch_size:]
                     self.batches_delivered_since_evaluation += 1

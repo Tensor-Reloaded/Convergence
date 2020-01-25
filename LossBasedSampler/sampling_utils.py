@@ -96,25 +96,6 @@ class UniformSamplingByReprDeltas(SelectionByBottleneckReprDelta):
         return batches
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     def compute_dist_matrix(self, repr_deltas):
         r = repr_deltas.clone()
         return (r.unsqueeze(1) - r.unsqueeze(0)).pow(2).sum(-1)
