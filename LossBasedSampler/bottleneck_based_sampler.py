@@ -1,4 +1,4 @@
-from torch.utils.data.sampler import Sampler
+from torch.utils.data.sampler import Sampler, BatchSampler, SubsetRandomSampler
 from LossBasedSampler.sampling_utils import *
 from models import BottleneckModel
 
@@ -37,7 +37,7 @@ class BottleneckBasedShuffler(BatchSampler):
         self.learned_deltas = torch.zeros([self.dataset.__len__(), self.model.bottleneck_size], device=self.device)
         self.starting_representation = None
 
-        self.sel_strategy = UniformSamplingByReprDeltas()
+        self.sel_strategy = UniformSamplingByReprDeltas(self.batch_size)
         self.epoch = 0
 
     def __iter__(self):
