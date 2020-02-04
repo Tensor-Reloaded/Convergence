@@ -106,7 +106,6 @@ def main():
                         help='Seed to be used by randomizer')
     parser.add_argument('--progress_bar', '-pb',
                         action='store_true', help='Show the progress bar')
-
     parser.add_argument('--use_custom_sample_order', '-cso', action='store_true', help='Do not use random shuffling, but a selected order strategy')
     parser.add_argument('--classic_warm_up',
                         action='store_true', help='Perform classic warmp up at the begining')
@@ -114,10 +113,16 @@ def main():
                         action='store_true', help='Perform special warmp up -all samples have same probability for each class- at the begining -make sure your model has no bias, or that the bias is deativated in this phase')
     parser.add_argument('--eval_batch_size', default=10000,
                         type=int, help='size of the batch when computing the loss in advance')
+    parser.add_argument('--bottleneck_size', default=16,
+                        type=int, help='size of the batch when computing the loss in advance')
     parser.add_argument('--eval_batch_count', default=5,
                         type=int, help='number of batches to include when computing the loss in advance. If you want all ds, set a high number')
     parser.add_argument('--eval_freq', default=1,
                         type=int, help='after how many batches to re compute the loss in advance')
+
+    parser.add_argument('--num_epochs_to_reinitialize_repr', default=3,
+                        type=int, help='after how many batches to re compute the loss in advance')
+
     parser.add_argument('--ignore_correct_prediction',
                         action='store_true', help='If sampled correctly classified should be considered for the next batch')
 
@@ -149,8 +154,8 @@ class Solver(object):
         if self.args.save_dir == "" or self.args.save_dir == None:
             self.writer = SummaryWriter()
         else:
-            self.writer = SummaryWriter(logdir="runs/"+self.args.save_dir)
-            with open("runs/"+self.args.save_dir+"/README.md", 'w+') as f:
+            self.writer = SummaryWriter(logdir="_runs/"+self.args.save_dir)
+            with open("_runs/"+self.args.save_dir+"/README.md", 'w+') as f:
                 f.write(' '.join(sys.argv[1:]))
         self.batch_plot_idx = 0
 
@@ -204,6 +209,7 @@ class Solver(object):
                 eval_freq=self.args.eval_freq,
                 with_replacement=self.args.with_replacement,
                 device=self.device,
+                num_epochs_to_reinitialize_repr=self.args.num_epochs_to_reinitialize_repr,
             )
 
             self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_sampler=lbs)
@@ -231,7 +237,7 @@ class Solver(object):
             self.device = torch.device('cpu')
 
         self.model = eval(self.args.model)
-        self.model = BottleneckModel(self.model, 16)
+        self.model = BottleneckModel(self.model, self.args.bottleneck_size)
         self.save_dir = "../storage/" + self.args.save_dir
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
@@ -548,9 +554,9 @@ class Solver(object):
         paths = [os.path.join(self.save_dir, basename) for basename in files if "_0_" not in basename]
         if len(paths) > 0:
             src = max(paths, key=os.path.getctime)
-            copyfile(src, os.path.join("runs",self.args.save_dir,os.path.basename(src)))
+            copyfile(src, os.path.join("_runs", self.args.save_dir, os.path.basename(src)))
             
-        with open("runs/"+self.args.save_dir+"/README.md", 'a+') as f:
+        with open("_runs/"+self.args.save_dir+"/README.md", 'a+') as f:
             f.write("\n## Accuracy\n %.3f%%" % (best_accuracy * 100))
         print("Saved best accuracy checkpoint")
 

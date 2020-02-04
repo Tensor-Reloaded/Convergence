@@ -37,10 +37,11 @@ class BottleneckBasedShuffler(BatchSampler):
         self.learned_deltas = torch.zeros([self.dataset.__len__(), self.model.bottleneck_size], device=self.device)
         self.starting_representation = None
 
-        self.sel_strategy = UniformSamplingByReprDeltas(self.batch_size)
+        self.sel_strategy = UniformSamplingByReprDeltas(self.batch_size, eval_freq)
         self.epoch = 0
 
     def __iter__(self):
+        self.epoch += 1
         self.sorted_idxs = torch.randperm(len(self.dataset))
         self.batches_delivered_since_evaluation = 0
         first_batch = True
@@ -61,45 +62,45 @@ class BottleneckBasedShuffler(BatchSampler):
                                                               )
                 if self.epoch % self.num_epochs_to_reinitialize_repr == 0 and first_batch:
                     first_batch = False
-
-                    yield self.sorted_idxs[:self.batch_size]
-                    self.sorted_idxs = self.sorted_idxs[self.batch_size:]
-                    self.batches_delivered_since_evaluation += 1
-
+                    print("Recomputing initial representations ")
                     self.compute_initial_representations()
                     continue
 
                 bottlenecks, idxs = self.compute_bn_representations()
                 repr_delta = self.compute_representation_delta(bottlenecks, idxs)
-                self.sorted_idxs = self.sel_strategy.get_order(repr_delta, idxs)
+                evaluated_idxs = self.sel_strategy.get_order(repr_delta, idxs)
+                remaining_idxs = torch.from_numpy(np.setdiff1d(self.sorted_idxs, evaluated_idxs))
 
-                yield self.sorted_idxs[:self.batch_size]
-                self.sorted_idxs = self.sorted_idxs[self.batch_size:]
-                self.batches_delivered_since_evaluation += 1
+                self.sorted_idxs = torch.cat([evaluated_idxs,remaining_idxs])
+
+            yield self.sorted_idxs[:self.batch_size]
+            self.sorted_idxs = self.sorted_idxs[self.batch_size:]
+            self.batches_delivered_since_evaluation += 1
 
             if not self.drop_last:
                 yield self.sorted_idxs
 
-    def compute_bn_representations(self):
+    def compute_bn_representations(self, force_full_epoch=False):
         bottle_necks = []
         idxs = []
         for batch_idx, (data, target, idx) in enumerate(self.loader):
             data, target = data.to(self.device), target.to(self.device)
             with torch.no_grad():
+                self.model.eval()
                 sample_bn = self.model.get_bottleneck_repr(data)
                 bottle_necks.append(sample_bn)
                 idxs.append(idx)
 
-            if (batch_idx + 1) >= self.number_of_eval_batches:
+            if (batch_idx + 1) >= self.number_of_eval_batches and not force_full_epoch:
                 break
-
+        self.model.train()
         return torch.cat(bottle_necks, dim=0), torch.cat(idxs)
 
     def __len__(self):
         return len(self.dataset) // self.batch_size
 
     def compute_initial_representations(self):
-        representations, idxs = self.compute_bn_representations()
+        representations, idxs = self.compute_bn_representations(force_full_epoch=True)
         sorted_idxs = torch.argsort(idxs)
         self.starting_representation = representations[sorted_idxs]
 

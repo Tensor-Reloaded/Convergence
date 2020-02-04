@@ -10,7 +10,7 @@ class BottleneckModel(nn.Module):
         self.bottleneck = nn.Sequential(
             nn.Linear(originalModule.classifier.in_features, bottleneck_size),
             nn.ReLU(),
-            nn.BatchNorm1d(bottleneck_size)
+            # nn.BatchNorm1d(bottleneck_size)
         )
 
         self.classifier = nn.Sequential(
