@@ -1,141 +1,57 @@
+import collections
 import sys
+import pprint
 import argparse
 import pickle
 import os
+import re
 from shutil import copyfile
 
 import numpy as np
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.data
 from torch.utils.data.sampler import SubsetRandomSampler
 import torchvision
 from tensorboardX import SummaryWriter
 from torchvision import transforms as transforms
+import hydra
+from hydra import utils
+from omegaconf import DictConfig
 
-from learn_utils import reset_seed, EarlyStopping
+from learn_utils import *
 from misc import progress_bar
 from models import *
 
-from LossBasedSampler.loss_based_sampler import LossBasedShuffler
-from LossBasedSampler.bottleneck_based_sampler import BottleneckBasedShuffler
-
-CIFAR_10_CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
-CIFAR_100_CLASSES = (
-    'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle', 
-    'bicycle', 'bottle', 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel', 
-    'can', 'castle', 'caterpillar', 'cattle', 'chair', 'chimpanzee', 'clock', 
-    'cloud', 'cockroach', 'couch', 'crab', 'crocodile', 'cup', 'dinosaur', 
-    'dolphin', 'elephant', 'flatfish', 'forest', 'fox', 'girl', 'hamster', 
-    'house', 'kangaroo', 'keyboard', 'lamp', 'lawn_mower', 'leopard', 'lion',
-    'lizard', 'lobster', 'man', 'maple_tree', 'motorcycle', 'mountain', 'mouse',
-    'mushroom', 'oak_tree', 'orange', 'orchid', 'otter', 'palm_tree', 'pear',
-    'pickup_truck', 'pine_tree', 'plain', 'plate', 'poppy', 'porcupine',
-    'possum', 'rabbit', 'raccoon', 'ray', 'road', 'rocket', 'rose',
-    'sea', 'seal', 'shark', 'shrew', 'skunk', 'skyscraper', 'snail', 'snake',
-    'spider', 'squirrel', 'streetcar', 'sunflower', 'sweet_pepper', 'table',
-    'tank', 'telephone', 'television', 'tiger', 'tractor', 'train', 'trout',
-    'tulip', 'turtle', 'wardrobe', 'whale', 'willow_tree', 'wolf', 'woman',
-    'worm'
-)
+APEX_MISSING = False
+try:
+    from apex.parallel import DistributedDataParallel as DDP
+    from apex.fp16_utils import *
+    from apex import amp, optimizers
+    from apex.multi_tensor_apply import multi_tensor_applier
+except ImportError:
+    print("Apex not found on the system, it won't be using half-precision")
+    APEX_MISSING = True
+    pass
 
 
-def main():
-    parser = argparse.ArgumentParser(description="cifar-10 with PyTorch")
-    parser.add_argument('--model', default="VGG('VGG19')",
-                        type=str, help='what model to use')
-    parser.add_argument('--dataset', default="CIFAR-10", type=str, choices=[
-                        "CIFAR-10", "CIFAR-100"], help='What dataset to use. Options: CIFAR-10, CIFAR-100')
-    parser.add_argument('--half', '-hf', action='store_true',
-                        help='use half precision')
-    parser.add_argument('--load_model', default="",
-                        type=str, help='what model to load')
+storage_dir = "../storage/"
 
-    parser.add_argument('--lr', default=0.01, type=float, help='learning rate')
-    parser.add_argument('--wd', default=0.0, type=float, help='weight decay')
-    parser.add_argument('--momentum', default=0.0,
-                        type=float, help='sgd momentum')
-    parser.add_argument('--nesterov', action='store_true',
-                        help='Use nesterov momentum')
-    parser.add_argument('--epoch', default=200, type=int,
-                        help='number of epochs tp train for')
-    parser.add_argument('--train_batch_size', default=128,
-                        type=int, help='training batch size')
-    parser.add_argument('--test_batch_size', default=512,
-                        type=int, help='testing batch size')
-    parser.add_argument('--train_subset', default=None,
-                        type=int, help='Number of samples to train on')
-    parser.add_argument('--initialization', '-init', default=0, type=int,
-                        help='The type of initialization to be used \n 0 - Default pytorch initialization \n 1 - Xavier Initialization\n 2 - He et. al Initialization\n 3 - SELU Initialization\n 4 - Orthogonal Initialization')
-    parser.add_argument('--initialization_batch_norm', '-init_batch',
-                        action='store_true', help='use batch norm initialization')
+@hydra.main(config_path='experiments/config.yaml', strict=True)
+def main(config: DictConfig):
+    global storage_dir
+    storage_dir = os.path.dirname(utils.get_original_cwd()) + "/storage/"
+    save_config_path = "runs/" + config.save_dir
+    os.makedirs(save_config_path, exist_ok=True)
+    with open(os.path.join(save_config_path, "README.md"), 'w+') as f:
+        f.write(config.pretty())
 
-    parser.add_argument('--save_model', '-save',
-                        action='store_true', help='perform_top_down_sum')
-    parser.add_argument('--save_interval', default=5,
-                        type=int, help='perform_top_down_sum')
-    parser.add_argument('--save_dir', default="checkpoints",
-                        type=str, help='save dir name')
+    if APEX_MISSING:
+        config.half = False
 
-    parser.add_argument('--lr_milestones', nargs='+', type=int,
-                        default=[30, 60, 90, 120, 150], help='Lr Milestones')
-    parser.add_argument('--use_reduce_lr', action='store_true',
-                        help='Use reduce lr on plateou')
-    parser.add_argument('--reduce_lr_patience', type=int,
-                        default=20, help='reduce lr patience')
-    parser.add_argument('--reduce_lr_delta', type=float,
-                        default=0.02, help='minimal difference to improve losss')
-    parser.add_argument('--reduce_lr_min_lr', type=float,
-                        default=0.0005, help='minimal lr')
-    parser.add_argument('--lr_gamma', default=0.5, type=float, help='Lr gamma')
-    parser.add_argument('--es_patience', type=int, default=10000, help='Early stopping pacience')
-
-    parser.add_argument('--num_workers_train', default=4,
-                        type=int, help='number of workers for loading train data')
-    parser.add_argument('--num_workers_test', default=2,
-                        type=int, help='number of workers for loading test data')
-
-    parser.add_argument('--all_metrics', action='store_true',
-                        help="In addition to accuracy and loss calculate all metrics available")
-    parser.add_argument('--cuda', default=torch.cuda.is_available(),
-                        type=bool, help='whether cuda is in use')
-    parser.add_argument('--device_id', default=0,
-                        type=int, help='id of cuda device')
-    parser.add_argument('--seed', default=0, type=int,
-                        help='Seed to be used by randomizer')
-    parser.add_argument('--progress_bar', '-pb',
-                        action='store_true', help='Show the progress bar')
-    parser.add_argument('--use_custom_sample_order', '-cso', action='store_true', help='Do not use random shuffling, but a selected order strategy')
-    parser.add_argument('--classic_warm_up',
-                        action='store_true', help='Perform classic warmp up at the begining')
-    parser.add_argument('--homogen_probs_warm_up', '-hpo',
-                        action='store_true', help='Perform special warmp up -all samples have same probability for each class- at the begining -make sure your model has no bias, or that the bias is deativated in this phase')
-    parser.add_argument('--eval_batch_size', default=10000,
-                        type=int, help='size of the batch when computing the loss in advance')
-    parser.add_argument('--bottleneck_size', default=16,
-                        type=int, help='size of the batch when computing the loss in advance')
-    parser.add_argument('--eval_batch_count', default=5,
-                        type=int, help='number of batches to include when computing the loss in advance. If you want all ds, set a high number')
-    parser.add_argument('--eval_freq', default=1,
-                        type=int, help='after how many batches to re compute the loss in advance')
-
-    parser.add_argument('--num_epochs_to_reinitialize_repr', default=3,
-                        type=int, help='after how many batches to re compute the loss in advance')
-
-    parser.add_argument('--ignore_correct_prediction',
-                        action='store_true', help='If sampled correctly classified should be considered for the next batch')
-
-    parser.add_argument('--selection_strategy', default="ascending",
-                        type=str, help='how to sort by the losses. One of ascending , desceding,alternative')
-
-    parser.add_argument('--with_replacement',
-                        action='store_true',
-                        help='If samples given in an epoch can repeat or not')
-
-    args = parser.parse_args()
-
-    solver = Solver(args)
+    solver = Solver(config)
     solver.run()
 
 
@@ -151,17 +67,13 @@ class Solver(object):
         self.train_loader = None
         self.test_loader = None
         self.es = EarlyStopping(patience=self.args.es_patience)
-        if self.args.save_dir == "" or self.args.save_dir == None:
+        if not self.args.save_dir:
             self.writer = SummaryWriter()
         else:
-            self.writer = SummaryWriter(logdir="_runs/"+self.args.save_dir)
-            with open("_runs/"+self.args.save_dir+"/README.md", 'w+') as f:
-                f.write(' '.join(sys.argv[1:]))
-        self.batch_plot_idx = 0
+            self.writer = SummaryWriter(log_dir="runs/" + self.args.save_dir)
 
         self.train_batch_plot_idx = 0
         self.test_batch_plot_idx = 0
-        self.val_batch_plot_idx = 0
         if self.args.dataset == "CIFAR-10":
             self.nr_classes = len(CIFAR_10_CLASSES)
         elif self.args.dataset == "CIFAR-100":
@@ -172,84 +84,250 @@ class Solver(object):
             normalize = transforms.Normalize(
                 mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-            train_transform = transforms.Compose([transforms.ToTensor(), normalize])
-            test_transform = transforms.Compose([transforms.ToTensor(), normalize])
+            train_transform = transforms.Compose([transforms.RandomHorizontalFlip(
+            ), transforms.RandomCrop(32, 4), transforms.ToTensor(), normalize])
+            test_transform = transforms.Compose(
+                [transforms.ToTensor(), normalize])
         else:
             train_transform = transforms.Compose([transforms.ToTensor()])
             test_transform = transforms.Compose([transforms.ToTensor()])
 
         if self.args.dataset == "CIFAR-10":
             self.train_set = torchvision.datasets.CIFAR10(
-                root='../storage', train=True, download=True, transform=train_transform)
+                root=storage_dir, train=True, download=True, transform=train_transform)
         elif self.args.dataset == "CIFAR-100":
             self.train_set = torchvision.datasets.CIFAR100(
-                root='../storage', train=True, download=True, transform=train_transform)
-        if self.args.use_custom_sample_order:
-            # lbs = LossBasedShuffler(
-            #         batch_size=self.args.train_batch_size,
-            #         drop_last=True,
-            #         dataset=self.train_set,
-            #         model=self.model,
-            #         eval_batch_size=self.args.eval_batch_size,
-            #         number_of_eval_batches=self.args.eval_batch_count,
-            #         eval_freq=self.args.eval_freq,
-            #         with_replacement=self.args.with_replacement,
-            #         ignore_correct_predictions=self.args.ignore_correct_prediction,
-            #         selection_strategy=self.args.selection_strategy,
-            #         device=self.device
-            #     )
+                root=storage_dir, train=True, download=True, transform=train_transform)
 
-            lbs = BottleneckBasedShuffler(
-                batch_size=self.args.train_batch_size,
-                drop_last=True,
-                dataset=self.train_set,
-                model=self.model,
-                eval_batch_size=self.args.eval_batch_size,
-                number_of_eval_batches=self.args.eval_batch_count,
-                eval_freq=self.args.eval_freq,
-                with_replacement=self.args.with_replacement,
-                device=self.device,
-                num_epochs_to_reinitialize_repr=self.args.num_epochs_to_reinitialize_repr,
-            )
-
-            self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_sampler=lbs)
-        else:
+        if self.args.train_subset is None:
             self.train_loader = torch.utils.data.DataLoader(
-                dataset=self.train_set, batch_size=self.args.train_batch_size, shuffle=True
-            )
+                dataset=self.train_set, batch_size=self.args.train_batch_size, shuffle=True)
+        else:
+            filename = "subset_indices/subset_balanced_{}_{}.data".format(
+                self.dataset, self.args.train_subset)
+            if os.path.isfile(filename):
+                with open(filename, 'rb') as f:
+                    subset_indices = pickle.load(f)
+            else:
+                subset_indices = []
+                per_class = self.args.train_subset // self.nr_classes
+                targets = torch.tensor(self.train_set.targets)
+                for i in range(self.nr_classes):
+                    idx = (targets == i).nonzero().view(-1)
+                    perm = torch.randperm(idx.size(0))[:per_class]
+                    subset_indices += idx[perm].tolist()
+                if not os.path.isdir("subset_indices"):
+                    os.makedirs("subset_indices")
+                with open(filename, 'wb') as f:
+                    pickle.dump(subset_indices, f)
+            subset_indices = torch.LongTensor(subset_indices)
+            self.train_loader = torch.utils.data.DataLoader(
+                dataset=self.train_set, batch_size=self.args.train_batch_size,
+                sampler=SubsetRandomSampler(subset_indices))
+            if self.args.validate:
+                self.validate_loader = torch.utils.data.DataLoader(
+                    dataset=self.train_set, batch_size=self.args.train_batch_size,
+                    sampler=SubsetRandomSampler(subset_indices))
 
         if self.args.dataset == "CIFAR-10":
             test_set = torchvision.datasets.CIFAR10(
-                root='../storage', train=False, download=True, transform=test_transform)
+                root=storage_dir, train=False, download=True, transform=test_transform)
         elif self.args.dataset == "CIFAR-100":
             test_set = torchvision.datasets.CIFAR100(
-                root='../storage', train=False, download=True, transform=test_transform)
+                root=storage_dir, train=False, download=True, transform=test_transform)
 
         self.test_loader = torch.utils.data.DataLoader(
             dataset=test_set, batch_size=self.args.test_batch_size, shuffle=False)
 
     def load_model(self):
         if self.cuda:
-            self.device = torch.device('cuda:'+str(self.args.device_id))
-            print(self.device)
+            self.device = torch.device('cuda' + ":" + str(self.args.cuda_device))
             cudnn.benchmark = True
         else:
             self.device = torch.device('cpu')
 
         self.model = eval(self.args.model)
-        self.model = BottleneckModel(self.model, self.args.bottleneck_size)
-        self.save_dir = "../storage/" + self.args.save_dir
+        self.save_dir = storage_dir + self.args.save_dir
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
+        self.init_model()
+        if len(self.args.load_model) > 0:
+            print("Loading model from " + self.args.load_model)
+            self.model.load_state_dict(torch.load(self.args.load_model))
+        self.model = self.model.to(self.device)
+
+        if self.args.optimizer_name == "sgd":
+            self.optimizer = optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum, weight_decay=self.args.wd, nesterov=self.args.nesterov)
+        if self.args.scheduler == "ReduceLROnPlateau":
+            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer, mode='min', factor=self.args.lr_gamma, patience=self.args.reduce_lr_patience,
+                min_lr=self.args.reduce_lr_min_lr, verbose=True, threshold=self.args.reduce_lr_delta)
+        elif self.args.scheduler == "CosineAnnealingLR":
+            if self.args.sum_augmentation:
+                self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer,T_max=self.args.epoch//(self.args.nr_cycle-1),eta_min=self.args.reduce_lr_min_lr)
+            else:
+                self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer,T_max=self.args.epoch,eta_min=self.args.reduce_lr_min_lr)
+        elif self.args.scheduler == "MultiStepLR":
+            self.scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.args.lr_milestones, gamma=self.args.lr_gamma)
+        elif self.args.scheduler == "OneCycleLR":
+            self.scheduler = optim.lr_scheduler.OneCycleLR(self.optimizer,max_lr=self.args.lr, total_steps=None, epochs=self.args.epoch//(self.args.nr_cycle-1), steps_per_epoch=len(self.train_loader), pct_start=0.3, anneal_strategy='cos', cycle_momentum=True, base_momentum=0.85, max_momentum=0.95, div_factor=10.0, final_div_factor=500.0, last_epoch=-1)
+        else:
+            print("This scheduler is not implemented, go ahead an commit one")
+
+        self.criterion = nn.CrossEntropyLoss().to(self.device)
 
         if self.cuda:
             if self.args.half:
-                self.model.half()
-                for layer in self.model.modules():
-                    if isinstance(layer, nn.BatchNorm2d):
-                        layer.float()
-                print("Using half precision")
+                self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level=f"O{self.args.mixpo}",
+                                                            patch_torch_functions=True, keep_batchnorm_fp32=True)
 
+    def get_train_batch_plot_idx(self):
+        self.train_batch_plot_idx += 1
+        return self.train_batch_plot_idx - 1
+
+    def get_test_batch_plot_idx(self):
+        self.test_batch_plot_idx += 1
+        return self.test_batch_plot_idx - 1
+
+    def train(self):
+        print("train:")
+        self.model.train()
+        total_loss = 0
+        correct = 0
+        total = 0
+
+        for batch_num, (data, target) in enumerate(self.train_loader):
+            data, target = data.to(self.device), target.to(self.device)
+            self.optimizer.zero_grad()
+
+            output = self.model(data)
+            loss = self.criterion(output, target)
+            if self.args.half:
+                with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
+            self.optimizer.step()
+            total_loss += loss.item()
+            self.writer.add_scalar("Train/Batch_Loss", loss.item(), self.get_train_batch_plot_idx())
+
+            prediction = torch.max(output, 1)
+            total += target.size(0)
+
+            correct += torch.sum((prediction[1] == target).float()).item()
+
+            if self.args.progress_bar:
+                progress_bar(batch_num, len(self.train_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
+                             % (total_loss / (batch_num + 1), 100.0 * correct/total, correct, total))
+            if self.args.scheduler == "OneCycleLR":
+                self.scheduler.step()
+        return total_loss, correct / total
+
+    def test(self):
+        print("test:")
+        self.model.eval()
+        total_loss = 0
+        correct = 0
+        total = 0
+
+        with torch.no_grad():
+            for batch_num, (data, target) in enumerate(self.test_loader):
+                data, target = data.to(self.device), target.to(self.device)
+                output = self.model(data)
+                loss = self.criterion(output, target)
+                self.writer.add_scalar("Test/Batch_Loss", loss.item(), self.get_test_batch_plot_idx())
+                total_loss += loss.item()
+                prediction = torch.max(output, 1)
+                total += target.size(0)
+
+                correct += torch.sum((prediction[1] == target).float()).item()
+
+                if self.args.progress_bar:
+                    progress_bar(batch_num, len(self.test_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
+                                 % (total_loss / (batch_num + 1), 100. * correct / total, correct, total))
+
+        return total_loss, correct/total
+
+    def save(self, epoch, accuracy, tag=None):
+        if tag != None:
+            tag = "_"+tag
+        else:
+            tag = ""
+        model_out_path = self.save_dir + \
+            "/model_{}_{}{}.pth".format(
+                epoch, accuracy * 100, tag)
+        torch.save(self.model.state_dict(), model_out_path)
+        print("Checkpoint saved to {}".format(model_out_path))
+
+    def run(self):
+        if self.args.seed is not None:
+            reset_seed(self.args.seed)
+        self.load_data()
+        self.load_model()
+
+        best_accuracy = 0
+        try:
+            for epoch in range(1, self.args.epoch + 1):
+                print("\n===> epoch: %d/%d" % (epoch, self.args.epoch))
+
+                train_result = self.train()
+
+                loss = train_result[0]
+                accuracy = train_result[1]
+                self.writer.add_scalar("Train/Loss", loss, epoch)
+                self.writer.add_scalar("Train/Accuracy", accuracy, epoch)
+
+                test_result = self.test()
+
+                loss = test_result[0]
+                accuracy = test_result[1]
+                self.writer.add_scalar("Test/Loss", loss, epoch)
+                self.writer.add_scalar("Test/Accuracy", accuracy, epoch)
+
+                self.writer.add_scalar("Model/Norm", self.get_model_norm(), epoch)
+                self.writer.add_scalar("Train_Params/Learning_rate", self.scheduler.get_last_lr()[0], epoch)
+
+                if best_accuracy < test_result[1]:
+                    best_accuracy = test_result[1]
+                    self.save(epoch, best_accuracy)
+                    print("===> BEST ACC. PERFORMANCE: %.3f%%" % (best_accuracy * 100))
+
+                if self.args.save_model and epoch % self.args.save_interval == 0:
+                    self.save(epoch, 0)
+
+                if self.args.scheduler == "MultiStepLR":
+                    self.scheduler.step()
+                elif self.args.scheduler == "ReduceLROnPlateau":
+                    self.scheduler.step(train_result[0])
+                elif self.args.scheduler == "OneCycleLR":
+                    pass
+                else:
+                    self.scheduler.step()
+
+                if self.es.step(train_result[0]):
+                    print("Early stopping")
+                    raise KeyboardInterrupt
+        except KeyboardInterrupt:
+            pass
+
+        print("===> BEST ACC. PERFORMANCE: %.3f%%" % (best_accuracy * 100))
+        files = os.listdir(self.save_dir)
+        paths = [os.path.join(self.save_dir, basename) for basename in files if "_0" not in basename]
+        if len(paths) > 0:
+            src = max(paths, key=os.path.getctime)
+            copyfile(src, os.path.join("runs", self.args.save_dir, os.path.basename(src)))
+
+        with open("runs/" + self.args.save_dir + "/README.md", 'a+') as f:
+            f.write("\n## Accuracy\n %.3f%%" % (best_accuracy * 100))
+        print("Saved best accuracy checkpoint")
+
+    def get_model_norm(self, norm_type=2):
+        norm = 0.0
+        for param in self.model.parameters():
+            norm += torch.norm(input=param, p=norm_type, dtype=torch.float)
+        return norm
+
+    def init_model(self):
         if self.args.initialization == 1:
             # xavier init
             for m in self.model.modules():
@@ -283,289 +361,6 @@ class Solver(object):
                 if isinstance(m, nn.BatchNorm2d):
                     nn.init.constant(m.weight, 1)
                     nn.init.constant(m.bias, 0)
-
-        if len(self.args.load_model) > 0:
-            print("Loading model from " + self.args.load_model)
-            self.model.load_state_dict(torch.load(self.args.load_model))
-
-
-        self.model = self.model.to(self.device)
-        # self.model = nn.DataParallel(self.model,[0,1])
-
-        self.optimizer = optim.SGD(self.model.parameters(
-        ), lr=self.args.lr, momentum=self.args.momentum, weight_decay=self.args.wd, nesterov=self.args.nesterov)
-        if self.args.use_reduce_lr:
-            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-                self.optimizer, mode='min', factor=self.args.lr_gamma, patience=self.args.reduce_lr_patience, min_lr=self.args.reduce_lr_min_lr, verbose=True, threshold=self.args.reduce_lr_delta)
-        else:
-            self.scheduler = optim.lr_scheduler.MultiStepLR(
-                self.optimizer, milestones=self.args.lr_milestones, gamma=self.args.lr_gamma)
-        if self.args.half:
-            self.criterion = nn.CrossEntropyLoss().half().to(self.device)
-        else:
-            self.criterion = nn.CrossEntropyLoss().to(self.device)
-
-    def get_batch_plot_idx(self):
-        self.batch_plot_idx += 1
-        return self.batch_plot_idx - 1
-
-    def train(self):
-        print("train:")
-        self.model.train()
-        total_loss = 0
-        correct = 0
-        TP = 0
-        TN = 0
-        FP = 0
-        FN = 0
-        total = 0
-
-        for batch_num, (data, target) in enumerate(self.train_loader):
-            data, target = data.to(self.device), target.to(self.device)
-            if self.device == torch.device('cuda') and self.args.half:
-                data = data.half()
-            self.optimizer.zero_grad()
-
-            output = self.model(data)
-            loss = self.criterion(output, target)
-            loss.backward()
-            self.optimizer.step()
-            total_loss += loss.item()
-            self.writer.add_scalar(
-                "Train/Batch Loss", loss.item(), self.get_batch_plot_idx())
-            # second param "1" represents the dimension to be reduced
-            prediction = torch.max(output, 1)
-            total += target.size(0)
-
-            correct += torch.sum(prediction[1] == target).item()
-
-            pred_labels = torch.nn.functional.one_hot(
-                prediction[1], num_classes=10)
-            true_labels = torch.nn.functional.one_hot(
-                target, num_classes=10)
-
-            # True Positive (TP): we predict a label of 1 (positive), and the true label
-            TP += torch.sum((pred_labels == 1) & (true_labels == 1))
-
-            # True Negative (TN): we predict a label of 0 (negative), and the true label is 0.
-            TN += torch.sum((pred_labels == 0) & (true_labels == 0))
-
-            # False Positive (FP): we predict a label of 1 (positive), but the true label is 0.
-            FP += torch.sum((pred_labels == 1) & (true_labels == 0))
-
-            # False Negative (FN): we predict a label of 0 (negative), but the true label is 1.
-            FN += torch.sum((pred_labels == 0) & (true_labels == 1))
-
-            if self.args.progress_bar:
-                progress_bar(batch_num, len(self.train_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
-                             % (total_loss / (batch_num + 1), 100.0 * correct/total, correct, total))
-
-        return total_loss, correct / total, TP, TN, FP, FN
-
-    def test(self):
-        print("test:")
-        self.model.eval()
-        total_loss = 0
-        correct = 0
-        TP = 0
-        TN = 0
-        FP = 0
-        FN = 0
-        total = 0
-
-        with torch.no_grad():
-            for batch_num, (data, target) in enumerate(self.test_loader):
-                data, target = data.to(self.device), target.to(self.device)
-                if self.device == torch.device('cuda') and self.args.half:
-                    data = data.half()
-                output = self.model(data)
-                loss = self.criterion(output, target)
-                self.writer.add_scalar(
-                    "Test/Batch Loss", loss.item(), self.get_batch_plot_idx())
-                total_loss += loss.item()
-                prediction = torch.max(output, 1)
-                total += target.size(0)
-
-                correct += torch.sum(prediction[1] == target).item()
-
-                pred_labels = torch.nn.functional.one_hot(
-                    prediction[1], num_classes=10)
-                true_labels = torch.nn.functional.one_hot(
-                    target, num_classes=10)
-
-                # True Positive (TP): we predict a label of 1 (positive), and the true label
-                TP += torch.sum((pred_labels == 1) & (true_labels == 1))
-
-                # True Negative (TN): we predict a label of 0 (negative), and the true label is 0.
-                TN += torch.sum((pred_labels == 0) & (true_labels == 0))
-
-                # False Positive (FP): we predict a label of 1 (positive), but the true label is 0.
-                FP += torch.sum((pred_labels == 1) & (true_labels == 0))
-
-                # False Negative (FN): we predict a label of 0 (negative), but the true label is 1.
-                FN += torch.sum((pred_labels == 0) & (true_labels == 1))
-
-                if self.args.progress_bar:
-                    progress_bar(batch_num, len(self.test_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
-                                 % (total_loss / (batch_num + 1), 100. * correct / total, correct, total))
-
-        return total_loss, correct/total, TP, TN, FP, FN
-
-    def save(self, epoch, accuracy, tag=None):
-        if tag != None:
-            tag = "_"+tag
-        else:
-            tag = ""
-        model_out_path = self.save_dir + \
-            "/model_{}_{}{}.pth".format(
-                epoch, accuracy * 100, tag)
-        torch.save(self.model.state_dict(), model_out_path)
-        print("Checkpoint saved to {}".format(model_out_path))
-
-    def run(self):
-        reset_seed(self.args.seed)
-        self.load_model()
-        self.load_data()
-
-
-        best_accuracy = 0
-        try:
-            for epoch in range(1, self.args.epoch + 1):
-                print("\n===> epoch: %d/%d" % (epoch, self.args.epoch))
-
-                train_result = self.train()
-
-                # Took the metrics from here: https://en.wikipedia.org/wiki/Precision_and_recall
-                loss = train_result[0]
-                accuracy = train_result[1]
-                self.writer.add_scalar("Train/Loss", loss, epoch)
-                self.writer.add_scalar("Train/Accuracy", accuracy, epoch)
-                if self.args.all_metrics:
-                    TP = train_result[2]
-                    TN = train_result[3]
-                    FP = train_result[4]
-                    FN = train_result[5]
-                    TPR = TP/(TP+FN)
-                    TNR = TN/(TN+FP)
-                    PPV = TP/(TP+FP)
-                    NPV = TN/(TN+FN)
-                    FNR = FN/(FN+TP)
-                    FPR = FP/(FP+TN)
-                    FDR = FP/(FP+TP)
-                    FOR = FN/(FN+TN)
-                    TS = TP/(TP+FN+FP)
-                    F1 = (2*TP)/(2*TP+FP+FN)
-                    MCC = (TP*TN - FP*FN)/np.sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))
-                    BM = TPR+TNR-1
-                    MK = PPV+NPV-1
-
-                    self.writer.add_scalar("Train/F1 score", F1, epoch)
-                    self.writer.add_scalar("Train/Sensitivity", TPR, epoch)
-                    self.writer.add_scalar("Train/Specificity", TNR, epoch)
-                    self.writer.add_scalar("Train/Precision", PPV, epoch)
-                    self.writer.add_scalar(
-                        "Train/Negative predictive value", NPV, epoch)
-                    self.writer.add_scalar("Train/Miss rate", FNR, epoch)
-                    self.writer.add_scalar("Train/Fall-out", FPR, epoch)
-                    self.writer.add_scalar(
-                        "Train/False discovery rate ", FDR, epoch)
-                    self.writer.add_scalar(
-                        "Train/False omission rate ", FOR, epoch)
-                    self.writer.add_scalar("Train/Threat score", TS, epoch)
-                    self.writer.add_scalar("Train/TP", TP, epoch)
-                    self.writer.add_scalar("Train/TN", TN, epoch)
-                    self.writer.add_scalar("Train/FP", FP, epoch)
-                    self.writer.add_scalar("Train/FN", FN, epoch)
-                    self.writer.add_scalar(
-                        "Train/Matthews correlation coefficient", MCC, epoch)
-                    self.writer.add_scalar("Train/Informedness", BM, epoch)
-                    self.writer.add_scalar("Train/Markedness", MK, epoch)
-
-                test_result = self.test()
-
-                loss = test_result[0]
-                accuracy = test_result[1]
-                self.writer.add_scalar("Test/Loss", loss, epoch)
-                self.writer.add_scalar("Test/Accuracy", accuracy, epoch)
-                if self.args.all_metrics:
-                    TP = test_result[2]
-                    TN = test_result[3]
-                    FP = test_result[4]
-                    FN = test_result[5]
-                    TPR = TP/(TP+FN)
-                    TNR = TN/(TN+FP)
-                    PPV = TP/(TP+FP)
-                    NPV = TN/(TN+FN)
-                    FNR = FN/(FN+TP)
-                    FPR = FP/(FP+TN)
-                    FDR = FP/(FP+TP)
-                    FOR = FN/(FN+TN)
-                    TS = TP/(TP+FN+FP)
-                    F1 = (2*TP)/(2*TP+FP+FN)
-                    MCC = (TP*TN - FP*FN)/np.sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))
-                    BM = TPR+TNR-1
-                    MK = PPV+NPV-1
-
-                    self.writer.add_scalar("Test/F1 score", F1, epoch)
-                    self.writer.add_scalar("Test/Sensitivity", TPR, epoch)
-                    self.writer.add_scalar("Test/Specificity", TNR, epoch)
-                    self.writer.add_scalar("Test/Precision", PPV, epoch)
-                    self.writer.add_scalar(
-                        "Test/Negative predictive value", NPV, epoch)
-                    self.writer.add_scalar("Test/Miss rate", FNR, epoch)
-                    self.writer.add_scalar("Test/Fall-out", FPR, epoch)
-                    self.writer.add_scalar(
-                        "Test/False discovery rate ", FDR, epoch)
-                    self.writer.add_scalar("Test/False omission rate ", FOR, epoch)
-                    self.writer.add_scalar("Test/Threat score", TS, epoch)
-                    self.writer.add_scalar("Test/TP", TP, epoch)
-                    self.writer.add_scalar("Test/TN", TN, epoch)
-                    self.writer.add_scalar("Test/FP", FP, epoch)
-                    self.writer.add_scalar("Test/FN", FN, epoch)
-                    self.writer.add_scalar(
-                        "Test/Matthews correlation coefficient", MCC, epoch)
-                    self.writer.add_scalar("Test/Informedness", BM, epoch)
-                    self.writer.add_scalar("Test/Markedness", MK, epoch)
-
-                self.writer.add_scalar("Model/Norm", self.get_model_norm(), epoch)
-                self.writer.add_scalar(
-                    "Train Params/Learning rate", self.scheduler.get_lr()[0], epoch)
-
-                if best_accuracy < test_result[1]:
-                    best_accuracy = test_result[1]
-                    self.save(epoch, best_accuracy)
-                    print("===> BEST ACC. PERFORMANCE: %.3f%%" % (best_accuracy * 100))
-
-                if self.args.save_model and epoch % self.args.save_interval == 0:
-                    self.save(epoch, 0)
-
-                if self.args.use_reduce_lr:
-                    self.scheduler.step(train_result[0])
-                else:
-                    self.scheduler.step(epoch)
-
-                if self.es.step(train_result[0]):
-                        raise KeyboardInterrupt
-        except KeyboardInterrupt:
-            pass
-        
-        print("===> BEST ACC. PERFORMANCE: %.3f%%" % (best_accuracy * 100))
-        files = os.listdir(self.save_dir)
-        paths = [os.path.join(self.save_dir, basename) for basename in files if "_0_" not in basename]
-        if len(paths) > 0:
-            src = max(paths, key=os.path.getctime)
-            copyfile(src, os.path.join("_runs", self.args.save_dir, os.path.basename(src)))
-            
-        with open("_runs/"+self.args.save_dir+"/README.md", 'a+') as f:
-            f.write("\n## Accuracy\n %.3f%%" % (best_accuracy * 100))
-        print("Saved best accuracy checkpoint")
-
-
-    def get_model_norm(self, norm_type=2):
-        norm = 0.0
-        for param in self.model.parameters():
-            norm += torch.norm(input=param, p=norm_type, dtype=torch.float)
-        return norm
 
 
 if __name__ == '__main__':
