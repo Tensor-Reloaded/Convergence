@@ -25,6 +25,8 @@ from learn_utils import *
 from misc import progress_bar
 from models import *
 
+from orderers import MultiAttemptOrderer
+
 APEX_MISSING = False
 try:
     from apex.parallel import DistributedDataParallel as DDP
@@ -100,8 +102,16 @@ class Solver(object):
                 root=storage_dir, train=True, download=True, transform=train_transform)
 
         if self.args.train_subset is None:
-            self.train_loader = torch.utils.data.DataLoader(
-                dataset=self.train_set, batch_size=self.args.train_batch_size, shuffle=True)
+            if self.args.orderer == "baseline":
+                self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_size=self.args.train_batch_size, shuffle=True)
+            else:
+                if self.args.orderer == "multi_attempt":
+                    orderer = MultiAttemptOrderer(dataset=self.train_set, model=self.model, batch_size=self.args.train_batch_size, criterion=self.criterion, nr_attempts=self.args.nr_attempts)
+                elif self.args.orderer == "batch_loss_shuffler":
+                    print("This orderer is not implemented, go ahead an commit one")
+                    exit()
+                
+                self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_sampler=orderer)
         else:
             filename = "subset_indices/subset_balanced_{}_{}.data".format(
                 self.dataset, self.args.train_subset)
@@ -173,6 +183,7 @@ class Solver(object):
             self.scheduler = optim.lr_scheduler.OneCycleLR(self.optimizer,max_lr=self.args.lr, total_steps=None, epochs=self.args.epoch//(self.args.nr_cycle-1), steps_per_epoch=len(self.train_loader), pct_start=0.3, anneal_strategy='cos', cycle_momentum=True, base_momentum=0.85, max_momentum=0.95, div_factor=10.0, final_div_factor=500.0, last_epoch=-1)
         else:
             print("This scheduler is not implemented, go ahead an commit one")
+            exit()
 
         self.criterion = nn.CrossEntropyLoss().to(self.device)
 
@@ -262,8 +273,8 @@ class Solver(object):
     def run(self):
         if self.args.seed is not None:
             reset_seed(self.args.seed)
-        self.load_data()
         self.load_model()
+        self.load_data()
 
         best_accuracy = 0
         try:
