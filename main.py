@@ -1,4 +1,5 @@
 import collections
+from typing import List, Optional, Union
 import sys
 import pprint
 import argparse
@@ -39,12 +40,17 @@ except ImportError:
     pass
 
 
-storage_dir = "../storage/"
+DatasetType = Union[torchvision.datasets.CIFAR10, torchvision.datasets.CIFAR100, torchvision.datasets.MNIST]
+
+STORAGE_DIR: str
+SUBSET_INDICES_DIR: str
 
 @hydra.main(config_path='experiments/config.yaml', strict=True)
 def main(config: DictConfig):
-    global storage_dir
-    storage_dir = os.path.dirname(utils.get_original_cwd()) + "/storage/"
+    global STORAGE_DIR, SUBSET_INDICES_DIR
+    STORAGE_DIR = os.path.dirname(utils.get_original_cwd()) + "/storage/"
+    SUBSET_INDICES_DIR = os.path.join(STORAGE_DIR, 'subset_indices')
+
     save_config_path = "runs/" + config.save_dir
     os.makedirs(save_config_path, exist_ok=True)
     with open(os.path.join(save_config_path, "README.md"), 'w+') as f:
@@ -77,31 +83,58 @@ class Solver(object):
         self.train_batch_plot_idx = 0
         self.test_batch_plot_idx = 0
         if self.args.dataset == "CIFAR-10":
-            self.nr_classes = len(CIFAR_10_CLASSES)
+            self.dataset_nr_classes = len(CIFAR_10_CLASSES)
         elif self.args.dataset == "CIFAR-100":
-            self.nr_classes = len(CIFAR_100_CLASSES)
+            self.dataset_nr_classes = len(CIFAR_100_CLASSES)
+        elif self.args.dataset == "MNIST":
+            self.dataset_nr_classes = len(MNIST_CLASSES)
 
     def load_data(self):
         if "CIFAR" in self.args.dataset:
             normalize = transforms.Normalize(
                 mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-            train_transform = transforms.Compose([transforms.RandomHorizontalFlip(
-            ), transforms.RandomCrop(32, 4), transforms.ToTensor(), normalize])
-            test_transform = transforms.Compose(
-                [transforms.ToTensor(), normalize])
+            train_transform = transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomCrop(32, 4),
+                transforms.ToTensor(),
+                normalize
+            ])
+            test_transform = transforms.Compose([
+                transforms.ToTensor(),
+                normalize
+            ])
+        elif 'MNIST' == self.args.dataset:
+            normalize = transforms.Normalize(mean=(0.1307,), std=(0.3081,))
+
+            train_transform = transforms.Compose([
+                transforms.RandomCrop(28, 3),
+                transforms.ToTensor(),
+                normalize,
+            ])
+
+            test_transform = transforms.Compose([
+                transforms.ToTensor(),
+                normalize,
+            ])
+
         else:
             train_transform = transforms.Compose([transforms.ToTensor()])
             test_transform = transforms.Compose([transforms.ToTensor()])
 
         if self.args.dataset == "CIFAR-10":
             self.train_set = torchvision.datasets.CIFAR10(
-                root=storage_dir, train=True, download=True, transform=train_transform)
+                root=STORAGE_DIR, train=True, download=True, transform=train_transform)
         elif self.args.dataset == "CIFAR-100":
             self.train_set = torchvision.datasets.CIFAR100(
-                root=storage_dir, train=True, download=True, transform=train_transform)
+                root=STORAGE_DIR, train=True, download=True, transform=train_transform)
+        elif self.args.dataset == "MNIST":
+            self.train_set = torchvision.datasets.MNIST(
+                root=STORAGE_DIR, train=True, download=True, transform=train_transform)
+        else:
+            raise ValueError('Unknown dataset.')
 
-        if self.args.train_subset is None:
+        if self.args.train_subset is None and self.args.classes_subset is None:
             if self.args.orderer == "baseline":
                 self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_size=self.args.train_batch_size, shuffle=True)
             else:
@@ -113,41 +146,72 @@ class Solver(object):
                 
                 self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_sampler=orderer)
         else:
-            filename = "subset_indices/subset_balanced_{}_{}.data".format(
-                self.dataset, self.args.train_subset)
-            if os.path.isfile(filename):
-                with open(filename, 'rb') as f:
-                    subset_indices = pickle.load(f)
-            else:
-                subset_indices = []
-                per_class = self.args.train_subset // self.nr_classes
-                targets = torch.tensor(self.train_set.targets)
-                for i in range(self.nr_classes):
-                    idx = (targets == i).nonzero().view(-1)
-                    perm = torch.randperm(idx.size(0))[:per_class]
-                    subset_indices += idx[perm].tolist()
-                if not os.path.isdir("subset_indices"):
-                    os.makedirs("subset_indices")
-                with open(filename, 'wb') as f:
-                    pickle.dump(subset_indices, f)
-            subset_indices = torch.LongTensor(subset_indices)
-            self.train_loader = torch.utils.data.DataLoader(
-                dataset=self.train_set, batch_size=self.args.train_batch_size,
-                sampler=SubsetRandomSampler(subset_indices))
-            if self.args.validate:
-                self.validate_loader = torch.utils.data.DataLoader(
-                    dataset=self.train_set, batch_size=self.args.train_batch_size,
-                    sampler=SubsetRandomSampler(subset_indices))
+            self.train_loader = self._build_subset_loader(
+                self.train_set, 'train', self.args.train_batch_size, self.args.train_subset, self.args.classes_subset)
 
         if self.args.dataset == "CIFAR-10":
             test_set = torchvision.datasets.CIFAR10(
-                root=storage_dir, train=False, download=True, transform=test_transform)
+                root=STORAGE_DIR, train=False, download=True, transform=test_transform)
         elif self.args.dataset == "CIFAR-100":
             test_set = torchvision.datasets.CIFAR100(
-                root=storage_dir, train=False, download=True, transform=test_transform)
+                root=STORAGE_DIR, train=False, download=True, transform=test_transform)
+        elif self.args.dataset == "MNIST":
+            test_set = torchvision.datasets.MNIST(
+                root=STORAGE_DIR, train=False, download=True, transform=test_transform)
+        else:
+            raise ValueError(f'Unknown dataset {self.args.dataset}')
 
-        self.test_loader = torch.utils.data.DataLoader(
-            dataset=test_set, batch_size=self.args.test_batch_size, shuffle=False)
+        if self.args.classes_subset is None:
+            self.test_loader = torch.utils.data.DataLoader(
+                dataset=test_set, batch_size=self.args.test_batch_size, shuffle=False)
+        else:
+            self.test_loader = self._build_subset_loader(
+                test_set, 'test', self.args.test_batch_size, n_samples=None, classes=self.args.classes_subset)
+
+    def _build_subset_loader(
+            self,
+            dataset: DatasetType,
+            train_or_test: str,
+            batch_size: int,
+            n_samples: Optional[int],
+            classes: Optional[List[int]]):
+
+        if classes is None:
+            classes = list(range(self.dataset_nr_classes))
+
+        if train_or_test not in ['train', 'test']:
+            raise ValueError()
+
+        filename = os.path.join(
+            SUBSET_INDICES_DIR,
+            "subset_balanced_{}_{}_{}_{}.data".format(self.args.dataset, train_or_test, classes, n_samples)
+        )
+        if os.path.isfile(filename):
+            with open(filename, 'rb') as f:
+                subset_indices = pickle.load(f)
+        else:
+            subset_indices = []
+
+            if n_samples is None:
+                per_class = len(dataset)  # on purpose too large
+            else:
+                per_class = n_samples // len(classes)
+
+            targets = torch.as_tensor(dataset.targets)
+            for cls in classes:
+                idx = (targets == cls).nonzero().view(-1)
+                perm = torch.randperm(idx.size(0))
+                assert len(perm) >= per_class or per_class == len(dataset)
+                perm = perm[:per_class]
+                subset_indices += idx[perm].tolist()
+            if not os.path.isdir(SUBSET_INDICES_DIR):
+                os.makedirs(SUBSET_INDICES_DIR)
+            with open(filename, 'wb') as f:
+                pickle.dump(subset_indices, f)
+        subset_indices = torch.LongTensor(subset_indices)
+        return torch.utils.data.DataLoader(
+            dataset=dataset, batch_size=batch_size,
+            sampler=SubsetRandomSampler(subset_indices))
 
     def load_model(self):
         if self.cuda:
@@ -157,7 +221,7 @@ class Solver(object):
             self.device = torch.device('cpu')
 
         self.model = eval(self.args.model)
-        self.save_dir = storage_dir + self.args.save_dir
+        self.save_dir = STORAGE_DIR + self.args.save_dir
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
         self.init_model()
@@ -273,10 +337,19 @@ class Solver(object):
     def run(self):
         if self.args.seed is not None:
             reset_seed(self.args.seed)
+            print(f'Initialized before loading model and data with seed {self.args.seed}')
+
         self.load_model()
         self.load_data()
 
+        if self.args.seed is not None:
+            reset_seed(self.args.seed)
+            print(f'Initialized before training with seed {self.args.seed}')
+
         best_accuracy = 0
+
+        # self.save(epoch=0, accuracy=0.0)
+
         try:
             for epoch in range(1, self.args.epoch + 1):
                 print("\n===> epoch: %d/%d" % (epoch, self.args.epoch))
