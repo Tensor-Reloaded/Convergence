@@ -25,14 +25,16 @@ class MultiAttemptOrderer(BatchSampler):
             best = None
             best_idx = None
             self.model.eval()
-            for i in range(self.nr_attempts):
-                aux_sorted_idxs = torch.randperm(len(self.sorted_idxs))
-                X,y = self.dataset[aux_sorted_idxs[:self.batch_size]]
-                output = self.model(X.to(self.device))
-                loss = self.criterion(output, y.to(self.device)).item()
-                if best is None or best > loss:
-                    best = loss
-                    best_idx = aux_sorted_idxs
+
+            with torch.no_grad():
+                for i in range(self.nr_attempts):
+                    aux_sorted_idxs = torch.randperm(len(self.sorted_idxs))
+                    X,y = self.dataset[aux_sorted_idxs[:self.batch_size]]
+                    output = self.model(X.to(self.device))
+                    loss = self.criterion(output, y.to(self.device)).item()
+                    if best is None or best > loss:
+                        best = loss
+                        best_idx = aux_sorted_idxs
 
             self.model.train()
 
