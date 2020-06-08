@@ -1,5 +1,7 @@
+import time
 import collections
-from typing import List, Optional, Union
+import itertools
+from typing import List, Optional, Union, Tuple
 import sys
 import pprint
 import argparse
@@ -14,6 +16,7 @@ import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
+from torch.utils.data import Subset, DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
 import torchvision
 from tensorboardX import SummaryWriter
@@ -48,7 +51,7 @@ SUBSET_INDICES_DIR: str
 @hydra.main(config_path='experiments/config.yaml', strict=True)
 def main(config: DictConfig):
     global STORAGE_DIR, SUBSET_INDICES_DIR
-    STORAGE_DIR = os.path.dirname(utils.get_original_cwd()) + "/storage/"
+    STORAGE_DIR = os.path.join(os.path.dirname(utils.get_original_cwd()), "storage")
     SUBSET_INDICES_DIR = os.path.join(STORAGE_DIR, 'subset_indices')
 
     save_config_path = "runs/" + config.save_dir
@@ -90,6 +93,31 @@ class Solver(object):
             self.dataset_nr_classes = len(MNIST_CLASSES)
 
     def load_data(self):
+        train_set, test_set = self._build_datasets()
+
+        if self.args.train_subset is None and self.args.classes_subset is None:
+            if self.args.orderer == "baseline":
+                self.train_loader = torch.utils.data.DataLoader(dataset=train_set, batch_size=self.args.train_batch_size, shuffle=True)
+            else:
+                if self.args.orderer == "multi_attempt":
+                    orderer = MultiAttemptOrderer(dataset=train_set, model=self.model, batch_size=self.args.train_batch_size, criterion=self.criterion, nr_attempts=self.args.nr_attempts)
+                elif self.args.orderer == "batch_loss_shuffler":
+                    print("This orderer is not implemented, go ahead an commit one")
+                    exit()
+                
+                self.train_loader = torch.utils.data.DataLoader(dataset=train_set, batch_sampler=orderer)
+        else:
+            self.train_loader = self._build_subset_loader(
+                train_set, 'train', self.args.train_batch_size, self.args.train_subset, self.args.classes_subset)
+
+        if self.args.classes_subset is None:
+            self.test_loader = torch.utils.data.DataLoader(
+                dataset=test_set, batch_size=self.args.test_batch_size, shuffle=False)
+        else:
+            self.test_loader = self._build_subset_loader(
+                test_set, 'test', self.args.test_batch_size, n_samples=None, classes=self.args.classes_subset)
+
+    def _build_datasets(self) -> Tuple[DatasetType, DatasetType]:
         if "CIFAR" in self.args.dataset:
             normalize = transforms.Normalize(
                 mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -123,50 +151,24 @@ class Solver(object):
             test_transform = transforms.Compose([transforms.ToTensor()])
 
         if self.args.dataset == "CIFAR-10":
-            self.train_set = torchvision.datasets.CIFAR10(
+            train_set = torchvision.datasets.CIFAR10(
                 root=STORAGE_DIR, train=True, download=True, transform=train_transform)
-        elif self.args.dataset == "CIFAR-100":
-            self.train_set = torchvision.datasets.CIFAR100(
-                root=STORAGE_DIR, train=True, download=True, transform=train_transform)
-        elif self.args.dataset == "MNIST":
-            self.train_set = torchvision.datasets.MNIST(
-                root=STORAGE_DIR, train=True, download=True, transform=train_transform)
-        else:
-            raise ValueError('Unknown dataset.')
-
-        if self.args.train_subset is None and self.args.classes_subset is None:
-            if self.args.orderer == "baseline":
-                self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_size=self.args.train_batch_size, shuffle=True)
-            else:
-                if self.args.orderer == "multi_attempt":
-                    orderer = MultiAttemptOrderer(dataset=self.train_set, model=self.model, batch_size=self.args.train_batch_size, criterion=self.criterion, nr_attempts=self.args.nr_attempts)
-                elif self.args.orderer == "batch_loss_shuffler":
-                    print("This orderer is not implemented, go ahead an commit one")
-                    exit()
-                
-                self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_sampler=orderer)
-        else:
-            self.train_loader = self._build_subset_loader(
-                self.train_set, 'train', self.args.train_batch_size, self.args.train_subset, self.args.classes_subset)
-
-        if self.args.dataset == "CIFAR-10":
             test_set = torchvision.datasets.CIFAR10(
                 root=STORAGE_DIR, train=False, download=True, transform=test_transform)
         elif self.args.dataset == "CIFAR-100":
+            train_set = torchvision.datasets.CIFAR100(
+                root=STORAGE_DIR, train=True, download=True, transform=train_transform)
             test_set = torchvision.datasets.CIFAR100(
                 root=STORAGE_DIR, train=False, download=True, transform=test_transform)
         elif self.args.dataset == "MNIST":
+            train_set = torchvision.datasets.MNIST(
+                root=STORAGE_DIR, train=True, download=True, transform=train_transform)
             test_set = torchvision.datasets.MNIST(
                 root=STORAGE_DIR, train=False, download=True, transform=test_transform)
         else:
             raise ValueError(f'Unknown dataset {self.args.dataset}')
 
-        if self.args.classes_subset is None:
-            self.test_loader = torch.utils.data.DataLoader(
-                dataset=test_set, batch_size=self.args.test_batch_size, shuffle=False)
-        else:
-            self.test_loader = self._build_subset_loader(
-                test_set, 'test', self.args.test_batch_size, n_samples=None, classes=self.args.classes_subset)
+        return train_set, test_set
 
     def _build_subset_loader(
             self,
@@ -190,28 +192,35 @@ class Solver(object):
             with open(filename, 'rb') as f:
                 subset_indices = pickle.load(f)
         else:
-            subset_indices = []
+            subset_indices = self._build_subset_indices(dataset, n_samples, classes)
 
-            if n_samples is None:
-                per_class = len(dataset)  # on purpose too large
-            else:
-                per_class = n_samples // len(classes)
-
-            targets = torch.as_tensor(dataset.targets)
-            for cls in classes:
-                idx = (targets == cls).nonzero().view(-1)
-                perm = torch.randperm(idx.size(0))
-                assert len(perm) >= per_class or per_class == len(dataset)
-                perm = perm[:per_class]
-                subset_indices += idx[perm].tolist()
             if not os.path.isdir(SUBSET_INDICES_DIR):
                 os.makedirs(SUBSET_INDICES_DIR)
             with open(filename, 'wb') as f:
                 pickle.dump(subset_indices, f)
         subset_indices = torch.LongTensor(subset_indices)
+
         return torch.utils.data.DataLoader(
             dataset=dataset, batch_size=batch_size,
             sampler=SubsetRandomSampler(subset_indices))
+
+    def _build_subset_indices(self, dataset: DatasetType, n_samples: Optional[int], classes: List[int]):
+        subset_indices = []
+
+        if n_samples is None:
+            per_class = len(dataset)  # on purpose too large
+        else:
+            per_class = n_samples // len(classes)
+
+        targets = torch.as_tensor(dataset.targets)
+        for cls in classes:
+            idx = (targets == cls).nonzero().view(-1)
+            perm = torch.randperm(idx.size(0))
+            assert len(perm) >= per_class or per_class == len(dataset)
+            perm = perm[:per_class]
+            subset_indices += idx[perm].tolist()
+
+        return subset_indices
 
     def load_model(self):
         if self.cuda:
@@ -221,7 +230,7 @@ class Solver(object):
             self.device = torch.device('cpu')
 
         self.model = eval(self.args.model)
-        self.save_dir = STORAGE_DIR + self.args.save_dir
+        self.save_dir = os.path.join(STORAGE_DIR, self.args.save_dir)
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
         self.init_model()
@@ -265,7 +274,7 @@ class Solver(object):
         return self.test_batch_plot_idx - 1
 
     def train(self):
-        print("train:")
+        # print("train:")
         self.model.train()
         total_loss = 0
         correct = 0
@@ -296,10 +305,10 @@ class Solver(object):
                              % (total_loss / (batch_num + 1), 100.0 * correct/total, correct, total))
             if self.args.scheduler == "OneCycleLR":
                 self.scheduler.step()
-        return total_loss, correct / total
+        return total_loss, correct, total
 
     def test(self):
-        print("test:")
+        # print("test:")
         self.model.eval()
         total_loss = 0
         correct = 0
@@ -313,66 +322,124 @@ class Solver(object):
                 self.writer.add_scalar("Test/Batch_Loss", loss.item(), self.get_test_batch_plot_idx())
                 total_loss += loss.item()
                 prediction = torch.max(output, 1)
-                total += target.size(0)
 
-                correct += torch.sum((prediction[1] == target).float()).item()
+                correct += torch.sum((prediction[1] == target).int()).item()
+                total += target.size(0)
 
                 if self.args.progress_bar:
                     progress_bar(batch_num, len(self.test_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
                                  % (total_loss / (batch_num + 1), 100. * correct / total, correct, total))
 
-        return total_loss, correct/total
+        return total_loss, correct, total
 
     def save(self, epoch, accuracy, tag=None):
         if tag != None:
             tag = "_"+tag
         else:
             tag = ""
-        model_out_path = self.save_dir + \
-            "/model_{}_{}{}.pth".format(
-                epoch, accuracy * 100, tag)
+        model_out_path = os.path.join(self.save_dir, "model_{}_{}{}.pth".format(epoch, accuracy * 100, tag))
         torch.save(self.model.state_dict(), model_out_path)
         print("Checkpoint saved to {}".format(model_out_path))
 
     def run(self):
+        if self.args.all_batch_combinations:
+            self.run_all_batch_combinations()
+        else:
+            if self.args.seed is not None:
+                reset_seed(self.args.seed)
+                print(f'Initialized before loading model and data with seed {self.args.seed}')
+            self.load_model()
+            self.load_data()
+
+            self._do_run()
+
+    def run_all_batch_combinations(self):
+        assert self.args.load_model
+
         if self.args.seed is not None:
             reset_seed(self.args.seed)
             print(f'Initialized before loading model and data with seed {self.args.seed}')
 
-        self.load_model()
-        self.load_data()
+        train_set, test_set = self._build_datasets()
 
-        if self.args.seed is not None:
-            reset_seed(self.args.seed)
-            print(f'Initialized before training with seed {self.args.seed}')
+        assert len(train_set) % self.args.train_batch_size == 0
 
+        reset_seed(123) # for randperm consistency
+        train_indices = self._build_subset_indices(train_set, n_samples=self.args.train_subset, classes=self.args.classes_subset)
+        print('train_indices:', train_indices)
+        train_batches = torch.as_tensor(train_indices).split(self.args.train_batch_size)
+        print('train_batches:', train_batches)
+
+        test_indices = self._build_subset_indices(test_set, n_samples=None, classes=self.args.classes_subset)
+        print(f'{len(test_indices)} test samples')
+
+        assert len(train_batches) == 6
+        assert all(len(tb) == len(train_batches[0]) for tb in train_batches)
+
+        model = self.args.load_model[str(self.args.load_model).find('BasicConv'):str(self.args.load_model).find(')')]
+        out_dir = os.path.join(STORAGE_DIR, 'output_batches_combinations')
+        os.makedirs(out_dir, exist_ok=True)
+        out_tsv = os.path.join(out_dir, f'batches_combinations_{model}.csv')
+        with open(out_tsv, 'w') as f:
+            f.write('Batches,BatchesIndexes,PermutationIndex,TestLoss,TestCorrect,TestTotal,TestAcc\n')
+
+        start_time = time.time()
+
+        batches_perm = itertools.permutations(train_batches)
+        batches_idxs_perm = itertools.permutations(range(len(train_batches)))
+        for i, (batches, batches_idxs) in enumerate(zip(batches_perm, batches_idxs_perm)):
+            reset_seed(111)
+            self.load_model()
+            reset_seed(222)
+
+            train_sampler = FixedBatchesSampler(batches)
+
+            self.train_loader = DataLoader(
+                dataset=train_set,
+                batch_sampler=train_sampler)
+
+            self.test_loader = DataLoader(
+                dataset=Subset(test_set, test_indices),
+                batch_size=self.args.test_batch_size,
+                shuffle=False)
+
+            train_loss, train_correct, train_total = self.train()
+            test_loss, test_correct, test_total = self.test()
+
+            with open(out_tsv, 'a') as f:
+                batches = list(map(lambda b: b.tolist(), batches))
+                batches = str(batches).replace(',', ' ')
+                batches_idxs = str(batches_idxs).replace(',', ' ')
+                f.write(f'{batches},{batches_idxs},{i},{test_loss},{test_correct},{test_total},{test_correct / test_total}\n')
+
+            if (i + 1) % 50 == 0:
+                print(f'Done {i + 1} epochs in {time.time() - start_time:.2f} sec')
+                # break
+
+    def _do_run(self):
         best_accuracy = 0
 
-        # self.save(epoch=0, accuracy=0.0)
+        self.save(0, 0.0)
 
         try:
             for epoch in range(1, self.args.epoch + 1):
                 print("\n===> epoch: %d/%d" % (epoch, self.args.epoch))
 
-                train_result = self.train()
+                train_loss, train_acc = self.train()
 
-                loss = train_result[0]
-                accuracy = train_result[1]
-                self.writer.add_scalar("Train/Loss", loss, epoch)
-                self.writer.add_scalar("Train/Accuracy", accuracy, epoch)
+                self.writer.add_scalar("Train/Loss", train_loss, epoch)
+                self.writer.add_scalar("Train/Accuracy", train_acc, epoch)
 
-                test_result = self.test()
+                test_loss, test_acc = self.test()
 
-                loss = test_result[0]
-                accuracy = test_result[1]
-                self.writer.add_scalar("Test/Loss", loss, epoch)
-                self.writer.add_scalar("Test/Accuracy", accuracy, epoch)
+                self.writer.add_scalar("Test/Loss", test_loss, epoch)
+                self.writer.add_scalar("Test/Accuracy", test_acc, epoch)
 
                 self.writer.add_scalar("Model/Norm", self.get_model_norm(), epoch)
                 self.writer.add_scalar("Train_Params/Learning_rate", self.scheduler.get_last_lr()[0], epoch)
 
-                if best_accuracy < test_result[1]:
-                    best_accuracy = test_result[1]
+                if best_accuracy < test_acc:
+                    best_accuracy = test_acc
                     self.save(epoch, best_accuracy)
                     print("===> BEST ACC. PERFORMANCE: %.3f%%" % (best_accuracy * 100))
 
@@ -382,13 +449,13 @@ class Solver(object):
                 if self.args.scheduler == "MultiStepLR":
                     self.scheduler.step()
                 elif self.args.scheduler == "ReduceLROnPlateau":
-                    self.scheduler.step(train_result[0])
+                    self.scheduler.step(test_loss)
                 elif self.args.scheduler == "OneCycleLR":
                     pass
                 else:
                     self.scheduler.step()
 
-                if self.es.step(train_result[0]):
+                if self.es.step(test_loss):
                     print("Early stopping")
                     raise KeyboardInterrupt
         except KeyboardInterrupt:

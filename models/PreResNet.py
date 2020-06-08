@@ -47,7 +47,7 @@ class Bottleneck(nn.Module):
         return out
 
 class PreResNet(nn.Module):
-    def __init__(self, depth=164, dataset='cifar10', cfg=None):
+    def __init__(self, depth=164, cfg=None, in_channels=3, out_classes=10):
         super(PreResNet, self).__init__()
         assert (depth - 2) % 9 == 0, 'depth should be 9n+2'
 
@@ -61,19 +61,17 @@ class PreResNet(nn.Module):
 
         self.inplanes = 16
 
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, padding=1,
+        self.conv1 = nn.Conv2d(in_channels, 16, kernel_size=3, padding=1,
                                bias=False)
         self.layer1 = self._make_layer(block, 16, n, cfg = cfg[0:3*n])
         self.layer2 = self._make_layer(block, 32, n, cfg = cfg[3*n:6*n], stride=2)
         self.layer3 = self._make_layer(block, 64, n, cfg = cfg[6*n:9*n], stride=2)
         self.bn = nn.BatchNorm2d(64 * block.expansion)
         self.relu = nn.ReLU(inplace=True)
-        self.avgpool = nn.AvgPool2d(8)
+        # self.avgpool = nn.AvgPool2d(8) # CIFAR
+        self.avgpool = nn.AvgPool2d(7) # MNIST
 
-        if dataset == 'cifar10':
-            self.fc = nn.Linear(cfg[-1], 10)
-        elif dataset == 'cifar100':
-            self.fc = nn.Linear(cfg[-1], 100)
+        self.fc = nn.Linear(cfg[-1], out_classes)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):

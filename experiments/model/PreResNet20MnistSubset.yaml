@@ -1,0 +1,2 @@
+model: PreResNet(depth=20, in_channels=1, out_classes=2)
+#model: FC(in_channels=1, out_classes=2)

@@ -6,3 +6,4 @@ from .DenseNet import *
 from .GoogleNet import *
 from .WideResNet import *
 from .PreResNet import PreResNet
+from .BasicConv import BasicConv

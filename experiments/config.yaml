@@ -1,7 +1,7 @@
 defaults:
   - common: default
-  - model: PreResNet56
-  - dataset: cifar10
+  - model: BasicConvMnist
+  - dataset: mnist_01
   - optimizer: sgd
   - initializer: default
   - save: default
@@ -15,4 +15,10 @@ dataset: ${dataset_name}
 scheduler: ${scheduler_name}
 save_dir: "${model}/${aux_save_dir}/${seed}"
 
-load_model: ""
+#load_model: "C:/Facultate/Tensor-Reloaded/storage/PreResNet(depth=20, in_channels=1, out_classes=2)/Baseline/0/model_0_0.0.pth"
+
+load_model: "C:/Facultate/Tensor-Reloaded/storage/BasicConv(in_channels=1, out_classes=2)/Baseline/0/model_0_0.0.pth"
+
+#load_model: ""
+
+all_batch_combinations: True

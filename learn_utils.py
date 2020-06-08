@@ -7,6 +7,7 @@ import random
 
 import numpy as np
 import torch
+from torch.utils.data import Sampler
 import torch.nn as nn
 import torch.nn.init as init
 
@@ -116,3 +117,11 @@ def compute_weights_l1_norm(model):
         norm_sum += torch.sum(torch.abs(param))
     return norm_sum
 
+
+class FixedBatchesSampler(Sampler):
+    def __init__(self, batches):
+        super().__init__(None)
+        self.batches = batches
+
+    def __iter__(self):
+        return iter(self.batches)
