@@ -9,7 +9,7 @@ import pickle
 import os
 import re
 from shutil import copyfile
-
+import csv
 import numpy as np
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
@@ -222,12 +222,32 @@ class Solver(object):
 
         return subset_indices
 
-    def load_model(self):
+    def load_model_from_state_dict(self, state_dict):
+        if self.model is None:
+            self.set_device()
+            self.model = eval(self.args.model)
+
+        self.model.load_state_dict(state_dict)
+        self.model = self.model.to(self.device)
+
+        self.criterion = nn.CrossEntropyLoss().to(self.device)
+
+        if self.args.optimizer_name == "sgd":
+            self.optimizer = optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum, weight_decay=self.args.wd, nesterov=self.args.nesterov)
+        else:
+            raise ValueError(f'Unknown optimizer {self.args.optimizer_name}')
+
+        # scheduler is unused
+
+    def set_device(self):
         if self.cuda:
             self.device = torch.device('cuda' + ":" + str(self.args.cuda_device))
             cudnn.benchmark = True
         else:
             self.device = torch.device('cpu')
+
+    def load_model(self):
+        self.set_device()
 
         self.model = eval(self.args.model)
         self.save_dir = os.path.join(STORAGE_DIR, self.args.save_dir)
@@ -360,61 +380,88 @@ class Solver(object):
             reset_seed(self.args.seed)
             print(f'Initialized before loading model and data with seed {self.args.seed}')
 
-        train_set, test_set = self._build_datasets()
+        self.train_set, self.test_set = self._build_datasets()
 
-        assert len(train_set) % self.args.train_batch_size == 0
+        assert len(self.train_set) % self.args.train_batch_size == 0
 
         reset_seed(123) # for randperm consistency
-        train_indices = self._build_subset_indices(train_set, n_samples=self.args.train_subset, classes=self.args.classes_subset)
+        train_indices = self._build_subset_indices(self.train_set, n_samples=self.args.train_subset, classes=self.args.classes_subset)
         print('train_indices:', train_indices)
         train_batches = torch.as_tensor(train_indices).split(self.args.train_batch_size)
         print('train_batches:', train_batches)
 
-        test_indices = self._build_subset_indices(test_set, n_samples=None, classes=self.args.classes_subset)
+        test_indices = self._build_subset_indices(self.test_set, n_samples=None, classes=self.args.classes_subset)
         print(f'{len(test_indices)} test samples')
 
         assert len(train_batches) == 6
         assert all(len(tb) == len(train_batches[0]) for tb in train_batches)
 
-        model = self.args.load_model[str(self.args.load_model).find('BasicConv'):str(self.args.load_model).find(')')]
+        self.test_loader = DataLoader(
+            dataset=Subset(self.test_set, test_indices),
+            batch_size=self.args.test_batch_size,
+            shuffle=False)
+
+        base_model_name = self.args.load_model[self.args.load_model.find('BasicConv'):self.args.load_model.find(')')]
+        base_model_state_dict = torch.load(self.args.load_model)
+
+        self._do_all_final_epoch_permutations(
+            base_model_name,
+            base_model_state_dict,
+            prepare_epochs_batches=[],
+            final_epoch_batches=train_batches)
+
+    def _train_with_batches(self, batches):
+        train_sampler = FixedBatchesSampler(batches)
+
+        self.train_loader = DataLoader(
+            dataset=self.train_set,
+            batch_sampler=train_sampler)
+
+        _ = self.train()
+
+    def _do_prepare_before_all_batch_perms(self, base_model_state_dict, prepare_epochs_batches):
+        reset_seed(111)
+        self.load_model_from_state_dict(base_model_state_dict)
+        reset_seed(222)
+
+        for batches in prepare_epochs_batches:
+            self._train_with_batches(batches)
+
+    def _do_all_final_epoch_permutations(self, base_model_name, base_model_state_dict, prepare_epochs_batches, final_epoch_batches):
         out_dir = os.path.join(STORAGE_DIR, 'output_batches_combinations')
         os.makedirs(out_dir, exist_ok=True)
-        out_tsv = os.path.join(out_dir, f'batches_combinations_{model}.csv')
-        with open(out_tsv, 'w') as f:
-            f.write('Batches,BatchesIndexes,PermutationIndex,TestLoss,TestCorrect,TestTotal,TestAcc\n')
+        out_csv = os.path.join(out_dir, f'batches_combinations_model={base_model_name}_epoch={len(prepare_epochs_batches)}.csv')
 
-        start_time = time.time()
+        with open(out_csv, 'w', newline='') as f:
+            csv_header = []
+            csv_header.extend([f'Epoch{i}Batches' for i in range(len(prepare_epochs_batches))])
+            csv_header.extend(['FinalBatches','FinalBatchesIndexes','FinalPermutationIndex'])
+            csv_header.extend(['TestLoss','TestCorrect','TestTotal','TestAcc'])
 
-        batches_perm = itertools.permutations(train_batches)
-        batches_idxs_perm = itertools.permutations(range(len(train_batches)))
-        for i, (batches, batches_idxs) in enumerate(zip(batches_perm, batches_idxs_perm)):
-            reset_seed(111)
-            self.load_model()
-            reset_seed(222)
+            w = csv.writer(f, )
+            w.writerow(csv_header)
 
-            train_sampler = FixedBatchesSampler(batches)
+            batches_perm = itertools.permutations(final_epoch_batches)
+            batches_idxs_perm = itertools.permutations(range(len(final_epoch_batches)))
 
-            self.train_loader = DataLoader(
-                dataset=train_set,
-                batch_sampler=train_sampler)
+            start_time = time.time()
 
-            self.test_loader = DataLoader(
-                dataset=Subset(test_set, test_indices),
-                batch_size=self.args.test_batch_size,
-                shuffle=False)
+            for i, (final_batches, final_batches_idxs) in enumerate(zip(batches_perm, batches_idxs_perm)):
+                self._do_prepare_before_all_batch_perms(base_model_state_dict, prepare_epochs_batches)
 
-            train_loss, train_correct, train_total = self.train()
-            test_loss, test_correct, test_total = self.test()
+                self._train_with_batches(final_batches)
 
-            with open(out_tsv, 'a') as f:
-                batches = list(map(lambda b: b.tolist(), batches))
-                batches = str(batches).replace(',', ' ')
-                batches_idxs = str(batches_idxs).replace(',', ' ')
-                f.write(f'{batches},{batches_idxs},{i},{test_loss},{test_correct},{test_total},{test_correct / test_total}\n')
+                test_loss, test_correct, test_total = self.test()
 
-            if (i + 1) % 50 == 0:
-                print(f'Done {i + 1} epochs in {time.time() - start_time:.2f} sec')
-                # break
+                csv_row = []
+                csv_row.extend(prepare_epochs_batches)
+                csv_row.append([bs.tolist() for bs in final_batches])
+                csv_row.append(final_batches_idxs)
+                csv_row.extend([i, test_loss, test_correct, test_total, test_correct / test_total])
+                w.writerow(csv_row)
+
+                if (i + 1) % 30 == 0:
+                    print(f'Done {i + 1} in {time.time() - start_time:.2f} sec')
 
     def _do_run(self):
         best_accuracy = 0
