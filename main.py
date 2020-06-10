@@ -448,7 +448,7 @@ class Solver(object):
         print(f'Model: {base_model_name}')
 
         FIRST_EPOCH = 0
-        LAST_EPOCH = 2
+        LAST_EPOCH = 3
         for epoch in range(FIRST_EPOCH, LAST_EPOCH + 1):
             if epoch == 0:
                 prepare_epochs_batches_list = [[]]
