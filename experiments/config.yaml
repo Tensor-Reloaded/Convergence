@@ -15,10 +15,10 @@ dataset: ${dataset_name}
 scheduler: ${scheduler_name}
 save_dir: "${model}/${aux_save_dir}/${seed}"
 
-#load_model: "C:/Facultate/Tensor-Reloaded/storage/PreResNet(depth=20, in_channels=1, out_classes=2)/Baseline/0/model_0_0.0.pth"
+all_batch_permutations: True
 
-load_model: "C:/Facultate/Tensor-Reloaded/storage/BasicConv(in_channels=1, out_classes=2)/Baseline/0/model_0_0.0.pth"
+load_model: ""
+train_indices_file: ""
 
-#load_model: ""
-
-all_batch_combinations: True
+#load_model: "C:/Facultate/Tensor-Reloaded/storage/output_batches_permutations/BasicConv(in_channels=1, out_classes=2).pt"
+#train_indices_file: "C:/Facultate/Tensor-Reloaded/storage/output_batches_permutations/train_indices.pt"

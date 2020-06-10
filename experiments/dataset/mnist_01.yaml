@@ -2,6 +2,6 @@ dataset_name: "MNIST"
 train_batch_size: 8
 test_batch_size: 512
 num_workers_train: 2
-num_workers_test: 2
+num_workers_test: 0
 train_subset: 48
 classes_subset: [0, 1]

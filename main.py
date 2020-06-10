@@ -1,34 +1,29 @@
-import time
-import collections
-import itertools
-from typing import List, Optional, Union, Tuple
-import sys
-import pprint
-import argparse
-import pickle
-import os
-import re
-from shutil import copyfile
-import csv
 import numpy as np
+from sklearn.cluster import KMeans
+import csv
+import itertools
+import os
+import pickle
+import time
+from shutil import copyfile
+from typing import List, Optional, Union, Tuple
+
+import hydra
+import pandas as pd
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
-import torch.nn as nn
-import torch.nn.functional as F
 import torch.utils.data
-from torch.utils.data import Subset, DataLoader
-from torch.utils.data.sampler import SubsetRandomSampler
 import torchvision
-from tensorboardX import SummaryWriter
-from torchvision import transforms as transforms
-import hydra
 from hydra import utils
 from omegaconf import DictConfig
+from tensorboardX import SummaryWriter
+from torch.utils.data import Subset, DataLoader
+from torch.utils.data.sampler import SubsetRandomSampler
+from torchvision import transforms as transforms
 
 from learn_utils import *
 from misc import progress_bar
 from models import *
-
 from orderers import MultiAttemptOrderer
 
 APEX_MISSING = False
@@ -38,7 +33,7 @@ try:
     from apex import amp, optimizers
     from apex.multi_tensor_apply import multi_tensor_applier
 except ImportError:
-    print("Apex not found on the system, it won't be using half-precision")
+    # print("Apex not found on the system, it won't be using half-precision")
     APEX_MISSING = True
     pass
 
@@ -47,12 +42,17 @@ DatasetType = Union[torchvision.datasets.CIFAR10, torchvision.datasets.CIFAR100,
 
 STORAGE_DIR: str
 SUBSET_INDICES_DIR: str
+OUTPUT_BATCHES_PERMUTATIONS_DIR: str
+BATCH_PERMUTATIONS_LOG_FREQUENCY = 60
+
 
 @hydra.main(config_path='experiments/config.yaml', strict=True)
 def main(config: DictConfig):
-    global STORAGE_DIR, SUBSET_INDICES_DIR
+    global STORAGE_DIR, SUBSET_INDICES_DIR, OUTPUT_BATCHES_PERMUTATIONS_DIR
     STORAGE_DIR = os.path.join(os.path.dirname(utils.get_original_cwd()), "storage")
     SUBSET_INDICES_DIR = os.path.join(STORAGE_DIR, 'subset_indices')
+    OUTPUT_BATCHES_PERMUTATIONS_DIR = os.path.join(STORAGE_DIR, 'output_batches_permutations')
+    os.makedirs(OUTPUT_BATCHES_PERMUTATIONS_DIR, exist_ok=True)
 
     save_config_path = "runs/" + config.save_dir
     os.makedirs(save_config_path, exist_ok=True)
@@ -91,6 +91,9 @@ class Solver(object):
             self.dataset_nr_classes = len(CIFAR_100_CLASSES)
         elif self.args.dataset == "MNIST":
             self.dataset_nr_classes = len(MNIST_CLASSES)
+
+        self.train_set = None
+        self.test_set = None
 
     def load_data(self):
         train_set, test_set = self._build_datasets()
@@ -362,8 +365,8 @@ class Solver(object):
         print("Checkpoint saved to {}".format(model_out_path))
 
     def run(self):
-        if self.args.all_batch_combinations:
-            self.run_all_batch_combinations()
+        if self.args.all_batch_permutations:
+            self.run_all_batch_permutations()
         else:
             if self.args.seed is not None:
                 reset_seed(self.args.seed)
@@ -373,51 +376,152 @@ class Solver(object):
 
             self._do_run()
 
-    def run_all_batch_combinations(self):
-        assert self.args.load_model
+    def _get_or_generate_train_permutation(self, epoch, size):
+        assert size == 48
 
+        f = os.path.join(OUTPUT_BATCHES_PERMUTATIONS_DIR, f'train_indices_permutation_epoch={epoch}_size={size}.pt')
+        if os.path.isfile(f):
+            return torch.load(f)
+
+        perm = torch.randperm(size)
+        torch.save(perm, f)
+        print(f'Saved train indices permutation for epoch {epoch} in {f}')
+        return perm
+
+    def run_all_batch_permutations(self):
         if self.args.seed is not None:
             reset_seed(self.args.seed)
             print(f'Initialized before loading model and data with seed {self.args.seed}')
 
         self.train_set, self.test_set = self._build_datasets()
 
-        assert len(self.train_set) % self.args.train_batch_size == 0
+        if self.args.train_indices_file:
+            train_indices = torch.load(self.args.train_indices_file)
+            print(f'Loaded train indices from {self.args.train_indices_file}')
+        else:
+            train_indices = self._build_subset_indices(
+                self.train_set,
+                n_samples=self.args.train_subset,
+                classes=self.args.classes_subset)
+            train_indices = torch.as_tensor(train_indices)
 
-        reset_seed(123) # for randperm consistency
-        train_indices = self._build_subset_indices(self.train_set, n_samples=self.args.train_subset, classes=self.args.classes_subset)
-        print('train_indices:', train_indices)
-        train_batches = torch.as_tensor(train_indices).split(self.args.train_batch_size)
-        print('train_batches:', train_batches)
+            out_f = os.path.join(OUTPUT_BATCHES_PERMUTATIONS_DIR, 'train_indices.pt')
+            torch.save(train_indices, out_f)
+            print('-' * 20)
+            print('-' * 20)
+            print(f'GENERATED NEW TRAIN INDICES, SAVED IN {out_f}')
+            print('-' * 20)
+            print('-' * 20)
+            print('train_indices:', train_indices)
+
+        assert len(train_indices) % self.args.train_batch_size == 0
 
         test_indices = self._build_subset_indices(self.test_set, n_samples=None, classes=self.args.classes_subset)
+        assert len(test_indices) == 2115
+        test_indices = test_indices[:2048]  # round number of test samples, nicer to train
         print(f'{len(test_indices)} test samples')
-
-        assert len(train_batches) == 6
-        assert all(len(tb) == len(train_batches[0]) for tb in train_batches)
 
         self.test_loader = DataLoader(
             dataset=Subset(self.test_set, test_indices),
             batch_size=self.args.test_batch_size,
-            shuffle=False)
+            shuffle=False,
+            num_workers=self.args.num_workers_test,
+        )
 
-        base_model_name = self.args.load_model[self.args.load_model.find('BasicConv'):self.args.load_model.find(')')]
-        base_model_state_dict = torch.load(self.args.load_model)
+        if self.args.load_model:
+            base_model_name = self.args.load_model[self.args.load_model.find('BasicConv'):self.args.load_model.find(')') + 1]
+            base_model_state_dict = torch.load(self.args.load_model)
+            print(f'Using model state dict loaded from {self.args.load_model}')
+        else:
+            base_model_name = 'BasicConv(in_channels=1, out_classes=2)'
+            assert self.args.model == base_model_name
+            self.load_model()
+            out_f = os.path.join(OUTPUT_BATCHES_PERMUTATIONS_DIR, base_model_name + '.pt')
+            torch.save(self.model.state_dict(), out_f)
+            print('-' * 20)
+            print('-' * 20)
+            print(f'USING A BRAND NEW MODEL STATE, SAVED IN {out_f}')
+            print('-' * 20)
+            print('-' * 20)
+            base_model_state_dict = torch.load(out_f)
 
-        self._do_all_final_epoch_permutations(
-            base_model_name,
-            base_model_state_dict,
-            prepare_epochs_batches=[],
-            final_epoch_batches=train_batches)
+        print(f'Model: {base_model_name}')
 
-    def _train_with_batches(self, batches):
-        train_sampler = FixedBatchesSampler(batches)
+        FIRST_EPOCH = 0
+        LAST_EPOCH = 2
+        for epoch in range(FIRST_EPOCH, LAST_EPOCH + 1):
+            if epoch == 0:
+                prepare_epochs_batches_list = [[]]
+            else:
+                prepare_epochs_batches_list = self._get_prepare_epochs_batches_list(base_model_name, epoch - 1)
 
-        self.train_loader = DataLoader(
-            dataset=self.train_set,
-            batch_sampler=train_sampler)
+            train_indices_perm = train_indices[self._get_or_generate_train_permutation(epoch, train_indices.size(0))]
+            train_batches = train_indices_perm.split(self.args.train_batch_size)
+            print('train_batches:', train_batches)
 
-        _ = self.train()
+            assert len(train_batches) == 6
+            assert all(len(tb) == len(train_batches[0]) for tb in train_batches)
+
+            out_csv = self._get_bs_perm_out_csv(base_model_name, epoch=epoch)
+            with open(out_csv, 'w', newline='') as f:
+                csv_header = []
+                csv_header.extend([f'Epoch{i}Batches' for i in range(epoch)])
+                csv_header.extend(['FinalBatches', 'FinalBatchesIndexes', 'FinalPermutationIndex'])
+                csv_header.extend(['TestLoss', 'TestCorrect', 'TestTotal', 'TestAcc'])
+
+                csv_writer = csv.writer(f)
+                csv_writer.writerow(csv_header)
+
+                for i, prepare_epochs_batches in enumerate(prepare_epochs_batches_list):
+                    details = f'epoch={epoch}, prepare={i + 1}/{len(prepare_epochs_batches_list)}'
+                    self._do_all_final_epoch_permutations(
+                        base_model_state_dict,
+                        details,
+                        prepare_epochs_batches,
+                        final_epoch_batches=train_batches,
+                        csv_writer=csv_writer)
+
+    def _get_prepare_epochs_batches_list(self, model: str, epoch: int) -> List[List[List[int]]]:
+        df = pd.read_csv(self._get_bs_perm_out_csv(model, epoch))
+        losses = df['TestLoss'].to_numpy()
+        min_idx = losses.argmin()
+        max_idx = losses.argmax()
+
+        N_CLUSTERS = 12
+        clusters = KMeans(n_clusters=N_CLUSTERS).fit_predict(losses.reshape(-1, 1))
+        idx_for_each_cluster = [np.where(clusters == i)[0][0] for i in range(N_CLUSTERS)]
+
+        idxs = frozenset(idx_for_each_cluster + [min_idx, max_idx])
+        batches_list = []
+        for idx in idxs:
+            batches = [eval(df.iloc[idx][e]) for e in range(0, epoch + 1)]
+            assert all(isinstance(bs, list) for bs in batches)
+            batches_list.append(batches)
+
+        return batches_list
+
+    def _do_all_final_epoch_permutations(self, base_model_state_dict, details: str, prepare_epochs_batches, final_epoch_batches, csv_writer):
+        batches_perm = itertools.permutations(final_epoch_batches)
+        batches_idxs_perm = itertools.permutations(range(len(final_epoch_batches)))
+
+        start_time = time.time()
+
+        for i, (final_batches, final_batches_idxs) in enumerate(zip(batches_perm, batches_idxs_perm)):
+            self._do_prepare_before_all_batch_perms(base_model_state_dict, prepare_epochs_batches)
+
+            self._train_with_batches(final_batches)
+
+            test_loss, test_correct, test_total = self.test()
+
+            csv_row = []
+            csv_row.extend(prepare_epochs_batches)
+            csv_row.append([bs.tolist() for bs in final_batches])
+            csv_row.append(final_batches_idxs)
+            csv_row.extend([i, test_loss, test_correct, test_total, test_correct / test_total])
+            csv_writer.writerow(csv_row)
+
+            if (i + 1) % BATCH_PERMUTATIONS_LOG_FREQUENCY == 0:
+                print(f'Done {details}, perms={i + 1} in {time.time() - start_time:.2f} sec')
 
     def _do_prepare_before_all_batch_perms(self, base_model_state_dict, prepare_epochs_batches):
         reset_seed(111)
@@ -427,41 +531,17 @@ class Solver(object):
         for batches in prepare_epochs_batches:
             self._train_with_batches(batches)
 
-    def _do_all_final_epoch_permutations(self, base_model_name, base_model_state_dict, prepare_epochs_batches, final_epoch_batches):
-        out_dir = os.path.join(STORAGE_DIR, 'output_batches_combinations')
-        os.makedirs(out_dir, exist_ok=True)
-        out_csv = os.path.join(out_dir, f'batches_combinations_model={base_model_name}_epoch={len(prepare_epochs_batches)}.csv')
+    def _get_bs_perm_out_csv(self, model, epoch):
+        return os.path.join(OUTPUT_BATCHES_PERMUTATIONS_DIR, f'batches_permutations_model={model}_epoch={epoch}.csv')
 
-        with open(out_csv, 'w', newline='') as f:
-            csv_header = []
-            csv_header.extend([f'Epoch{i}Batches' for i in range(len(prepare_epochs_batches))])
-            csv_header.extend(['FinalBatches','FinalBatchesIndexes','FinalPermutationIndex'])
-            csv_header.extend(['TestLoss','TestCorrect','TestTotal','TestAcc'])
+    def _train_with_batches(self, batches):
+        train_sampler = FixedBatchesSampler(batches)
 
-            w = csv.writer(f, )
-            w.writerow(csv_header)
+        self.train_loader = DataLoader(
+            dataset=self.train_set,
+            batch_sampler=train_sampler)
 
-            batches_perm = itertools.permutations(final_epoch_batches)
-            batches_idxs_perm = itertools.permutations(range(len(final_epoch_batches)))
-
-            start_time = time.time()
-
-            for i, (final_batches, final_batches_idxs) in enumerate(zip(batches_perm, batches_idxs_perm)):
-                self._do_prepare_before_all_batch_perms(base_model_state_dict, prepare_epochs_batches)
-
-                self._train_with_batches(final_batches)
-
-                test_loss, test_correct, test_total = self.test()
-
-                csv_row = []
-                csv_row.extend(prepare_epochs_batches)
-                csv_row.append([bs.tolist() for bs in final_batches])
-                csv_row.append(final_batches_idxs)
-                csv_row.extend([i, test_loss, test_correct, test_total, test_correct / test_total])
-                w.writerow(csv_row)
-
-                if (i + 1) % 30 == 0:
-                    print(f'Done {i + 1} in {time.time() - start_time:.2f} sec')
+        _ = self.train()
 
     def _do_run(self):
         best_accuracy = 0
