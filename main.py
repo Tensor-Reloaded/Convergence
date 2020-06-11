@@ -388,13 +388,7 @@ class Solver(object):
         print(f'Saved train indices permutation for epoch {epoch} in {f}')
         return perm
 
-    def run_all_batch_permutations(self):
-        if self.args.seed is not None:
-            reset_seed(self.args.seed)
-            print(f'Initialized before loading model and data with seed {self.args.seed}')
-
-        self.train_set, self.test_set = self._build_datasets()
-
+    def _get_or_generate_train_indices(self):
         if self.args.train_indices_file:
             train_indices = torch.load(self.args.train_indices_file)
             print(f'Loaded train indices from {self.args.train_indices_file}')
@@ -415,6 +409,16 @@ class Solver(object):
             print('train_indices:', train_indices)
 
         assert len(train_indices) % self.args.train_batch_size == 0
+        return train_indices
+
+    def run_all_batch_permutations(self):
+        if self.args.seed is not None:
+            reset_seed(self.args.seed)
+            print(f'Initialized before loading model and data with seed {self.args.seed}')
+
+        self.train_set, self.test_set = self._build_datasets()
+
+        self.train_indices = self._get_or_generate_train_indices()
 
         test_indices = self._build_subset_indices(self.test_set, n_samples=None, classes=self.args.classes_subset)
         assert len(test_indices) == 2115
@@ -450,36 +454,39 @@ class Solver(object):
         FIRST_EPOCH = 0
         LAST_EPOCH = 3
         for epoch in range(FIRST_EPOCH, LAST_EPOCH + 1):
-            if epoch == 0:
-                prepare_epochs_batches_list = [[]]
-            else:
-                prepare_epochs_batches_list = self._get_prepare_epochs_batches_list(base_model_name, epoch - 1)
+            self._run_all_batch_permutations_epoch(base_model_name, base_model_state_dict, epoch)
 
-            train_indices_perm = train_indices[self._get_or_generate_train_permutation(epoch, train_indices.size(0))]
-            train_batches = train_indices_perm.split(self.args.train_batch_size)
-            print('train_batches:', train_batches)
+    def _run_all_batch_permutations_epoch(self, base_model_name, base_model_state_dict, epoch):
+        if epoch == 0:
+            prepare_epochs_batches_list = [[]]
+        else:
+            prepare_epochs_batches_list = self._get_prepare_epochs_batches_list(base_model_name, epoch - 1)
 
-            assert len(train_batches) == 6
-            assert all(len(tb) == len(train_batches[0]) for tb in train_batches)
+        train_indices_perm = self.train_indices[self._get_or_generate_train_permutation(epoch, self.train_indices.size(0))]
+        train_batches = train_indices_perm.split(self.args.train_batch_size)
+        print('train_batches:', train_batches)
 
-            out_csv = self._get_bs_perm_out_csv(base_model_name, epoch=epoch)
-            with open(out_csv, 'w', newline='') as f:
-                csv_header = []
-                csv_header.extend([f'Epoch{i}Batches' for i in range(epoch)])
-                csv_header.extend(['FinalBatches', 'FinalBatchesIndexes', 'FinalPermutationIndex'])
-                csv_header.extend(['TestLoss', 'TestCorrect', 'TestTotal', 'TestAcc'])
+        assert len(train_batches) == 6
+        assert all(len(tb) == len(train_batches[0]) for tb in train_batches)
 
-                csv_writer = csv.writer(f)
-                csv_writer.writerow(csv_header)
+        out_csv = self._get_bs_perm_out_csv(base_model_name, epoch=epoch)
+        with open(out_csv, 'w', newline='') as f:
+            csv_header = []
+            csv_header.extend([f'Epoch{i}Batches' for i in range(epoch)])
+            csv_header.extend(['FinalBatches', 'FinalBatchesIndexes', 'FinalPermutationIndex'])
+            csv_header.extend(['TestLoss', 'TestCorrect', 'TestTotal', 'TestAcc'])
 
-                for i, prepare_epochs_batches in enumerate(prepare_epochs_batches_list):
-                    details = f'epoch={epoch}, prepare={i + 1}/{len(prepare_epochs_batches_list)}'
-                    self._do_all_final_epoch_permutations(
-                        base_model_state_dict,
-                        details,
-                        prepare_epochs_batches,
-                        final_epoch_batches=train_batches,
-                        csv_writer=csv_writer)
+            csv_writer = csv.writer(f)
+            csv_writer.writerow(csv_header)
+
+            for i, prepare_epochs_batches in enumerate(prepare_epochs_batches_list):
+                details = f'epoch={epoch}, prepare={i + 1}/{len(prepare_epochs_batches_list)}'
+                self._do_all_final_epoch_permutations(
+                    base_model_state_dict,
+                    details,
+                    prepare_epochs_batches,
+                    final_epoch_batches=train_batches,
+                    csv_writer=csv_writer)
 
     def _get_prepare_epochs_batches_list(self, model: str, epoch: int) -> List[List[List[int]]]:
         df = pd.read_csv(self._get_bs_perm_out_csv(model, epoch))
