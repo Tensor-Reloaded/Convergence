@@ -448,7 +448,7 @@ class Solver(object):
         print(f'Model: {base_model_name}')
 
         FIRST_EPOCH = 0
-        LAST_EPOCH = 3
+        LAST_EPOCH = 15
         for epoch in range(FIRST_EPOCH, LAST_EPOCH + 1):
             if epoch == 0:
                 prepare_epochs_batches_list = [[]]
@@ -563,7 +563,7 @@ class Solver(object):
                 self.writer.add_scalar("Test/Accuracy", test_acc, epoch)
 
                 self.writer.add_scalar("Model/Norm", self.get_model_norm(), epoch)
-                self.writer.add_scalar("Train_Params/Learning_rate", self.scheduler.get_last_lr()[0], epoch)
+                self.writer.add_scalar("Train_Params/Learning_rate", self.optimizer.param_groups[0]['lr'], epoch)
 
                 if best_accuracy < test_acc:
                     best_accuracy = test_acc
