@@ -216,12 +216,16 @@ class Solver(object):
             per_class = n_samples // len(classes)
 
         targets = torch.as_tensor(dataset.targets)
+        lens_per_cls = []
         for cls in classes:
             idx = (targets == cls).nonzero().view(-1)
             perm = torch.randperm(idx.size(0))
             assert len(perm) >= per_class or per_class == len(dataset)
             perm = perm[:per_class]
             subset_indices += idx[perm].tolist()
+            lens_per_cls.append(len(perm))
+
+        assert all(ln == lens_per_cls[0] for ln in lens_per_cls)
 
         return subset_indices
 
@@ -377,8 +381,6 @@ class Solver(object):
             self._do_run()
 
     def _get_or_generate_train_permutation(self, epoch, size):
-        assert size == 48
-
         f = os.path.join(OUTPUT_BATCHES_PERMUTATIONS_DIR, f'train_indices_permutation_epoch={epoch}_size={size}.pt')
         if os.path.isfile(f):
             return torch.load(f)
@@ -421,8 +423,6 @@ class Solver(object):
         self.train_indices = self._get_or_generate_train_indices()
 
         test_indices = self._build_subset_indices(self.test_set, n_samples=None, classes=self.args.classes_subset)
-        assert len(test_indices) == 2115
-        test_indices = test_indices[:2048]  # round number of test samples, nicer to train
         print(f'{len(test_indices)} test samples')
 
         self.test_loader = DataLoader(
@@ -433,12 +433,11 @@ class Solver(object):
         )
 
         if self.args.load_model:
-            base_model_name = self.args.load_model[self.args.load_model.find('BasicConv'):self.args.load_model.find(')') + 1]
+            base_model_name = self.args.load_model[self.args.load_model.find(self.args.model):self.args.load_model.find(')') + 1]
             base_model_state_dict = torch.load(self.args.load_model)
             print(f'Using model state dict loaded from {self.args.load_model}')
         else:
-            base_model_name = 'BasicConv(in_channels=1, out_classes=2)'
-            assert self.args.model == base_model_name
+            base_model_name = self.args.model
             self.load_model()
             out_f = os.path.join(OUTPUT_BATCHES_PERMUTATIONS_DIR, base_model_name + '.pt')
             torch.save(self.model.state_dict(), out_f)
@@ -452,7 +451,7 @@ class Solver(object):
         print(f'Model: {base_model_name}')
 
         FIRST_EPOCH = 0
-        LAST_EPOCH = 15
+        LAST_EPOCH = 0
         for epoch in range(FIRST_EPOCH, LAST_EPOCH + 1):
             self._run_all_batch_permutations_epoch(base_model_name, base_model_state_dict, epoch)
 
@@ -465,8 +464,8 @@ class Solver(object):
         train_indices_perm = self.train_indices[self._get_or_generate_train_permutation(epoch, self.train_indices.size(0))]
         train_batches = train_indices_perm.split(self.args.train_batch_size)
         print('train_batches:', train_batches)
+        print('len(train_batches):', len(train_batches))
 
-        assert len(train_batches) == 6
         assert all(len(tb) == len(train_batches[0]) for tb in train_batches)
 
         out_csv = self._get_bs_perm_out_csv(base_model_name, epoch=epoch)

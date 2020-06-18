@@ -1,0 +1,1 @@
+model: BasicConvCifar(out_classes=4)

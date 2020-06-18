@@ -1,7 +1,7 @@
 defaults:
   - common: default
-  - model: BasicConvMnist
-  - dataset: mnist_01
+  - model: BasicConvCifar
+  - dataset: cifar10_subset
   - optimizer: sgd
   - initializer: default
   - save: default

@@ -1,0 +1,7 @@
+dataset_name: "CIFAR-10"
+train_batch_size: 8
+test_batch_size: 512
+num_workers_train: 0
+num_workers_test: 4
+train_subset: 64
+classes_subset: [0, 1, 2, 3]
