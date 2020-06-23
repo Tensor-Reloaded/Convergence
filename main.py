@@ -26,7 +26,7 @@ from torchvision import transforms as transforms
 from learn_utils import *
 from misc import progress_bar
 from models import *
-from orderers import MultiAttemptOrderer
+from orderers import MultiAttemptOrderer, MaxLossDeltaOrderer
 
 APEX_MISSING = False
 try:
@@ -99,13 +99,14 @@ class Solver(object):
 
     def load_data(self):
         train_set, test_set = self._build_datasets()
-        print(self.args.train_subset==None, self.args.classes_subset)
         if self.args.train_subset == None and self.args.classes_subset == None:
             if self.args.orderer == "baseline":
                 self.train_loader = torch.utils.data.DataLoader(dataset=train_set, batch_size=self.args.train_batch_size, shuffle=True)
             else:
                 if self.args.orderer == "multi_attempt":
                     orderer = MultiAttemptOrderer(dataset=train_set, model=self.model, batch_size=self.args.train_batch_size, criterion=self.criterion, nr_attempts=self.args.nr_attempts)
+                elif self.args.orderer == "max_loss_delta":
+                    orderer = MaxLossDeltaOrderer(dataset=train_set, model=self.model, optimizer=self.optimizer, batch_size=self.args.train_batch_size, criterion=self.criterion, nr_attempts=self.args.nr_attempts, device=self.device, delta_loss_type="absolute")
                 elif self.args.orderer == "batch_loss_shuffler":
                     print("This orderer is not implemented, go ahead an commit one")
                     exit()
@@ -372,6 +373,7 @@ class Solver(object):
 
     def run(self):
         if self.args.all_batch_permutations:
+            print("wtf")
             self.run_all_batch_permutations()
         else:
             if self.args.seed is not None:

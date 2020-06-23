@@ -1,4 +1,4 @@
 aux_save_dir: "Baseline"
 orderer: "baseline"
 
-all_batch_permutations: True
+all_batch_permutations: False

@@ -1,0 +1,5 @@
+aux_save_dir: "MaxLossDeltaOrderer"
+orderer: "max_loss_delta"
+nr_attempts: 32
+
+progress_bar: True
