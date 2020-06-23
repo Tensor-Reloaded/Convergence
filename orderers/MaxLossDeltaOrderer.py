@@ -26,7 +26,7 @@ class MaxLossDeltaOrderer(BatchSampler):
 
     def __iter__(self):
         sorted_idxs = torch.randperm(len(self.dataset))
-        batches = sorted_idxs.split(split_size=self.batch_size)
+        batches = list(sorted_idxs.split(split_size=self.batch_size))
 
         while len(batches) >= 2:
             b = self.select_and_remove(batches)
