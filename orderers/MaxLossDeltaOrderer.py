@@ -1,5 +1,6 @@
 import copy
 import math
+import random
 from typing import List
 
 from torch.utils.data.sampler import Sampler,BatchSampler,SubsetRandomSampler
@@ -8,7 +9,7 @@ from orderers.utils import *
 
 class MaxLossDeltaOrderer(BatchSampler):
 
-    def __init__(self, dataset, model, optimizer, batch_size, criterion, device, delta_loss_type: str):
+    def __init__(self, dataset, model, optimizer, batch_size, criterion, nr_attempts, device, delta_loss_type: str):
         """
         delta_loss_type: One of 'absolute' or 'relative'
         """
@@ -18,6 +19,7 @@ class MaxLossDeltaOrderer(BatchSampler):
         self.batch_size = batch_size
         self.criterion = criterion
         self.device = device
+        self.nr_attempts = nr_attempts
 
         assert delta_loss_type in ['absolute', 'relative']
         self.delta_loss_type = delta_loss_type
@@ -46,8 +48,8 @@ class MaxLossDeltaOrderer(BatchSampler):
         max_diff = -math.inf  # max_diff can be negative if we overshoot the minimum and end up with bigger loss
         max_i = None
 
-        for i, candidate_batch in enumerate(candidate_batches):
-            X, y = self.dataset[candidate_batch]
+        for i in random.sample(range(len(candidate_batches)), min(self.nr_attempts, len(candidate_batches))):
+            X, y = self.dataset[candidate_batches[i]]
             X, y = X.to(self.device), y.to(self.device)
             prev_loss = self.criterion(self.model(X), y)
             prev_loss.backward()
