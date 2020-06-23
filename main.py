@@ -1,4 +1,4 @@
-# python main.py specific=multi_attempt model=PreResNet56 dataset=cifar10 scheduler=milestones nr_attempts=8
+# python main.py specific=max_loss_delta model=PreResNet56 dataset=cifar10 scheduler=milestones  test_batch_size=128 nr_attempts=32
 
 import numpy as np
 from sklearn.cluster import KMeans
