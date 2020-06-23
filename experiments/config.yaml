@@ -15,7 +15,7 @@ dataset: ${dataset_name}
 scheduler: ${scheduler_name}
 save_dir: "${model}/${aux_save_dir}/${seed}"
 
-all_batch_permutations: True
+all_batch_permutations: False
 
 load_model: ""
 train_indices_file: ""

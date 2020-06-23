@@ -1,3 +1,5 @@
+# python main.py specific=multi_attempt model=PreResNet56 dataset=cifar10 scheduler=milestones nr_attempts=8
+
 import numpy as np
 from sklearn.cluster import KMeans
 import csv
@@ -97,8 +99,8 @@ class Solver(object):
 
     def load_data(self):
         train_set, test_set = self._build_datasets()
-
-        if self.args.train_subset is None and self.args.classes_subset is None:
+        print(self.args.train_subset==None, self.args.classes_subset)
+        if self.args.train_subset == None and self.args.classes_subset == None:
             if self.args.orderer == "baseline":
                 self.train_loader = torch.utils.data.DataLoader(dataset=train_set, batch_size=self.args.train_batch_size, shuffle=True)
             else:
@@ -559,12 +561,14 @@ class Solver(object):
             for epoch in range(1, self.args.epoch + 1):
                 print("\n===> epoch: %d/%d" % (epoch, self.args.epoch))
 
-                train_loss, train_acc = self.train()
+                train_loss, train_acc, total = self.train()
+                train_acc /= total
 
                 self.writer.add_scalar("Train/Loss", train_loss, epoch)
                 self.writer.add_scalar("Train/Accuracy", train_acc, epoch)
 
-                test_loss, test_acc = self.test()
+                test_loss, test_acc, total = self.test()
+                test_acc /= total
 
                 self.writer.add_scalar("Test/Loss", test_loss, epoch)
                 self.writer.add_scalar("Test/Accuracy", test_acc, epoch)

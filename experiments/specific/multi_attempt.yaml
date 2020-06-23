@@ -1,3 +1,5 @@
 aux_save_dir: "MultiAttemptOrderer"
 orderer: "multi_attempt"
-nr_attempts: 16
+nr_attempts: 8
+
+progress_bar: True
