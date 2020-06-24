@@ -1,5 +1,6 @@
 aux_save_dir: "MaxLossDeltaOrderer"
 orderer: "max_loss_delta"
-nr_attempts: 32
+nr_attempts: 8
+static_batch_size: 128
 
 progress_bar: True
