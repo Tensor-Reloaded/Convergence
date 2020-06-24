@@ -1,0 +1,6 @@
+- specific=multi_attempt
+- model=PreResNet56
+- dataset=cifar10
+- scheduler=milestones
+- nr_attempts=8
+- test_batch_size=64

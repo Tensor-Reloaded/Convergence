@@ -1,0 +1,5 @@
+- specific=max_loss_delta
+- model=PreResNet56
+- dataset=cifar10
+- scheduler=milestones
+- test_batch_size=128

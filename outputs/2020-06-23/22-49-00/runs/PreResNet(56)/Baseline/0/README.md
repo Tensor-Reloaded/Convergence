@@ -42,3 +42,6 @@ train_batch_size: 128
 train_indices_file: ''
 train_subset: null
 wd: 0.0001
+
+## Accuracy
+ 92.860%
