@@ -102,6 +102,7 @@ class Solver(object):
 
     def load_data(self):
         train_set, test_set = self._build_datasets()
+        self.test_set = test_set
         if self.args.train_subset == None and self.args.classes_subset == None:
             if self.args.orderer == "baseline":
                 self.train_loader = torch.utils.data.DataLoader(
@@ -114,7 +115,7 @@ class Solver(object):
                     static_batch_target = None
                     if not self.args.static_batch_size == None:
                         aux_loader = torch.utils.data.DataLoader(
-                            dataset=test_set, batch_size=self.args.static_batch_size, shuffle=False)
+                            dataset=test_set, batch_size=self.args.static_batch_size, shuffle=True)
                         iterator = iter(aux_loader)
                         static_batch_target = iterator.next()
                         del aux_loader
@@ -643,7 +644,7 @@ class Solver(object):
 
                 if not self.args.static_batch_size == None:
                     aux_loader = torch.utils.data.DataLoader(
-                        dataset=test_set, batch_size=self.args.static_batch_size, shuffle=False)
+                        dataset=self.test_set, batch_size=self.args.static_batch_size, shuffle=True)
                     iterator = iter(aux_loader)
                     static_batch_target = iterator.next()
                     self.train_loader.batch_sampler.static_batch_target = static_batch_target

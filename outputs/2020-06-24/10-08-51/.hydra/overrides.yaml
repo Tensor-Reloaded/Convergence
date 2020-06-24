@@ -1,9 +1,0 @@
-- specific=max_loss_delta
-- model=PreResNet56
-- dataset=cifar10
-- scheduler=milestones
-- test_batch_size=512
-- nr_attempts=32
-- static_batch_size=512
-- aux_save_dir=MaxLossDeltaOrderer32StaticBatchSize
-- epoch=12
