@@ -50,6 +50,9 @@ class MaxLossDeltaOrderer(BatchSampler):
         max_diff = -math.inf
         max_i = None
 
+        if not self.static_batch_target is None:
+            self.static_batch_target = (self.static_batch_target[0].to(self.device),self.static_batch_target[1].to(self.device))
+
         for i in random.sample(range(len(candidate_batches)), min(self.nr_attempts, len(candidate_batches))):
             X, y = self.dataset[candidate_batches[i]]
             X, y = X.to(self.device), y.to(self.device)
